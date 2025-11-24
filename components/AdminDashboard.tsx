@@ -192,6 +192,14 @@ create table if not exists profiles (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- FORCE ADD COLUMNS (Fixes missing columns if table already exists)
+do $$ 
+begin 
+  alter table profiles add column if not exists full_name text;
+  alter table profiles add column if not exists is_superuser boolean default false;
+  alter table profiles add column if not exists is_disabled boolean default false;
+end $$;
+
 -- Automatically create a profile row when a new user signs up
 create or replace function public.handle_new_user()
 returns trigger as $$

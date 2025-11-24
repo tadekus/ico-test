@@ -52,7 +52,13 @@ export const completeAccountSetup = async (password: string, fullName: string) =
       .update({ full_name: fullName })
       .eq('id', user.id);
     
-    if (profileError) throw profileError;
+    if (profileError) {
+       // Check for schema cache or missing column error
+       if (profileError.message.includes("full_name") && profileError.message.includes("column")) {
+          throw new Error("Database schema out of date. Admin needs to run the SQL script to add 'full_name' column.");
+       }
+       throw profileError;
+    }
   }
 };
 
