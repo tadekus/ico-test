@@ -267,11 +267,14 @@ export const removeAssignment = async (assignmentId: number) => {
 export const checkUserExists = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
   
+  // Normalizing email to lowercase to prevent duplicates
+  const targetEmail = email.toLowerCase();
+  
   // 1. Check existing profiles
   const { data: profile } = await supabase
     .from('profiles')
     .select('id')
-    .ilike('email', email)
+    .ilike('email', targetEmail) // ilike matches case insensitive
     .maybeSingle();
     
   if (profile) return true;
@@ -280,7 +283,7 @@ export const checkUserExists = async (email: string): Promise<boolean> => {
   const { data: invite } = await supabase
     .from('user_invitations')
     .select('id')
-    .ilike('email', email)
+    .ilike('email', targetEmail)
     .eq('status', 'pending')
     .maybeSingle();
 
@@ -290,15 +293,16 @@ export const checkUserExists = async (email: string): Promise<boolean> => {
 export const sendSystemInvitation = async (email: string) => {
   if (!supabase) throw new Error("Supabase not configured");
 
+  const targetEmail = email.trim().toLowerCase();
+
   // Check for duplicates first
-  if (await checkUserExists(email)) {
+  if (await checkUserExists(targetEmail)) {
     throw new Error("User already exists or has a pending invitation.");
   }
 
   // 1. Send Magic Link (OTP) via Supabase
-  // Redirect back to this app so they can set their password
   const { error: authError } = await supabase.auth.signInWithOtp({
-    email,
+    email: targetEmail,
     options: {
       shouldCreateUser: true,
       emailRedirectTo: window.location.origin
@@ -313,12 +317,12 @@ export const sendSystemInvitation = async (email: string) => {
     const { error: dbError } = await supabase
       .from('user_invitations')
       .insert([{ 
-        email, 
+        email: targetEmail, 
         invited_by: user.id,
         status: 'pending'
       }]);
       
-    if (dbError) console.warn("Invited sent but failed to log to DB:", dbError.message);
+    if (dbError) console.warn("Invitation sent but failed to log to DB:", dbError.message);
   }
 };
 
@@ -338,7 +342,7 @@ export const checkMyPendingInvitation = async (email: string): Promise<boolean> 
   if (!supabase) return false;
   
   // Ensure we compare lowercase to lowercase to avoid mismatches
-  const normalizedEmail = email.toLowerCase();
+  const normalizedEmail = email.trim().toLowerCase();
 
   const { data, error } = await supabase
     .from('user_invitations')
@@ -348,7 +352,9 @@ export const checkMyPendingInvitation = async (email: string): Promise<boolean> 
     .maybeSingle();
 
   if (error) {
-      console.warn("Check invitation error (RLS might be blocking):", error.message);
+      // If error is permission denied, it's likely RLS.
+      // But RLS policies should allow reading OWN email.
+      console.warn("Check invitation error:", error.message);
       return false;
   }
   return !!data;
@@ -356,10 +362,13 @@ export const checkMyPendingInvitation = async (email: string): Promise<boolean> 
 
 export const acceptInvitation = async (email: string) => {
   if (!supabase) return;
+  const normalizedEmail = email.trim().toLowerCase();
+  
   const { error } = await supabase
     .from('user_invitations')
     .update({ status: 'accepted' })
-    .ilike('email', email); // ilike for safety
+    .ilike('email', normalizedEmail);
+    
   if (error) throw error;
 };
 
