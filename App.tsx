@@ -211,7 +211,7 @@ function App() {
             </div>
           )}
 
-          {activeTab === 'admin' && userProfile?.is_superuser && (
+          {activeTab === 'admin' && user && userProfile?.is_superuser && (
             <AdminDashboard currentUserId={user.id} />
           )}
           
