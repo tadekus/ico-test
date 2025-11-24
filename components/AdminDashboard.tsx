@@ -97,6 +97,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     }
   };
 
+  const isMasterAdmin = (email: string) => {
+    return email.toLowerCase() === 'tadekus@gmail.com';
+  };
+
   const getRepairSql = () => {
     return `
 -- REPAIR SCRIPT v4.0 (Permission Bypass Fix)
@@ -230,7 +234,7 @@ update profiles set is_superuser = true where lower(email) = 'tadekus@gmail.com'
               Invite User
             </h3>
             <p className="text-slate-400 text-xs mb-4">
-              Invited users will receive full <strong>Superuser</strong> access upon registration.
+              Invited users will receive <strong>Superuser</strong> access upon registration.
             </p>
             <form onSubmit={handleSendInvite} className="flex flex-col gap-2">
               <input
@@ -307,9 +311,13 @@ update profiles set is_superuser = true where lower(email) = 'tadekus@gmail.com'
                     <div className="text-xs text-slate-400">{p.email}</div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
-                    {p.is_superuser ? (
-                      <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+                    {isMasterAdmin(p.email) ? (
+                      <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-purple-100 text-purple-800 border border-purple-200">
                         Administrator
+                      </span>
+                    ) : p.is_superuser ? (
+                      <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+                        Superuser
                       </span>
                     ) : (
                       <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-slate-100 text-slate-600 border border-slate-200">
@@ -333,12 +341,12 @@ update profiles set is_superuser = true where lower(email) = 'tadekus@gmail.com'
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <button
                       onClick={() => handleToggleDisabled(p)}
-                      disabled={p.id === currentUserId}
+                      disabled={p.id === currentUserId || isMasterAdmin(p.email)}
                       className={`text-xs px-3 py-1.5 rounded-md font-medium transition-colors border ${
                           p.is_disabled 
                           ? 'border-emerald-200 text-emerald-600 hover:bg-emerald-50' 
                           : 'border-slate-200 text-slate-500 hover:border-red-200 hover:text-red-500 hover:bg-red-50'
-                      } ${p.id === currentUserId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      } ${(p.id === currentUserId || isMasterAdmin(p.email)) ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       {p.is_disabled ? 'Enable Account' : 'Disable'}
                     </button>
