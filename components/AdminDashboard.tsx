@@ -102,14 +102,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
 -- 1. Create function to securely claim superuser role
 -- SECURITY DEFINER = Runs with Admin privileges (Bypasses RLS)
 create or replace function claim_invited_role()
-returns void as $$
+returns text as $$
 declare
   is_invited boolean;
   current_email text;
 begin
+  -- Set search path to ensure we use public tables
+  set search_path = public, auth;
+
   -- Get current user email safely
   select lower(email) into current_email from auth.users where id = auth.uid();
   
+  if current_email is null then
+    return 'No authenticated user found';
+  end if;
+
   -- Check if invited (Case Insensitive)
   select exists(
     select 1 from public.user_invitations 
@@ -126,6 +133,10 @@ begin
     update public.user_invitations
     set status = 'accepted'
     where lower(email) = current_email;
+    
+    return 'Role Claimed: Superuser assigned';
+  else
+    return 'No invitation found for ' || current_email;
   end if;
 end;
 $$ language plpgsql security definer;

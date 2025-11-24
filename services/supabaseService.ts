@@ -64,13 +64,13 @@ export const completeAccountSetup = async (password: string, fullName: string) =
     // This calls the RPC function 'claim_invited_role' which checks user_invitations 
     // and updates the profile.is_superuser flag on the server side.
     try {
-      const { error: rpcError } = await supabase.rpc('claim_invited_role');
+      const { data: rpcData, error: rpcError } = await supabase.rpc('claim_invited_role');
       if (rpcError) {
         console.error("Role claim RPC failed:", rpcError);
         // We don't throw here to avoid blocking the user if the RPC is missing,
         // but it means they might not get superuser status immediately.
       } else {
-        console.log("Successfully claimed superuser role via RPC.");
+        console.log("Role claim RPC result:", rpcData);
       }
     } catch (e) {
       console.warn("RPC call error", e);
