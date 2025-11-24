@@ -314,7 +314,7 @@ do $$ begin
     
   drop policy if exists "Read own invitation" on user_invitations;
   create policy "Read own invitation" on user_invitations for select to authenticated 
-    using ( (select auth.jwt() ->> 'email') = email );
+    using ( lower(email) = lower(auth.jwt() ->> 'email') );
 end $$;
 
 -- 8. SET MASTER USER

@@ -68,6 +68,13 @@ function App() {
       // 2. Normal Flow
       const profile = await getUserProfile(currentUser.id);
       
+      // Fallback: If profile exists but name is empty, force setup (this handles edge cases where invite status might be desynced)
+      if (profile && !profile.full_name) {
+          setHasPendingInvite(true);
+          setIsLoadingSession(false);
+          return;
+      }
+      
       // Check if user is disabled
       if (profile?.is_disabled) {
         await signOut();

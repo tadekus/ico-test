@@ -247,8 +247,36 @@ export const removeAssignment = async (assignmentId: number) => {
 
 // --- INVITATIONS ---
 
+export const checkUserExists = async (email: string): Promise<boolean> => {
+  if (!supabase) return false;
+  
+  // 1. Check existing profiles
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('id')
+    .ilike('email', email)
+    .maybeSingle();
+    
+  if (profile) return true;
+
+  // 2. Check pending invitations
+  const { data: invite } = await supabase
+    .from('user_invitations')
+    .select('id')
+    .ilike('email', email)
+    .eq('status', 'pending')
+    .maybeSingle();
+
+  return !!invite;
+};
+
 export const sendSystemInvitation = async (email: string) => {
   if (!supabase) throw new Error("Supabase not configured");
+
+  // Check for duplicates first
+  if (await checkUserExists(email)) {
+    throw new Error("User already exists or has a pending invitation.");
+  }
 
   // 1. Send Magic Link (OTP) via Supabase
   // Redirect back to this app so they can set their password
@@ -298,7 +326,7 @@ export const checkMyPendingInvitation = async (email: string): Promise<boolean> 
   const { data, error } = await supabase
     .from('user_invitations')
     .select('*')
-    .ilike('email', normalizedEmail) // ilike for case-insensitive match
+    .ilike('email', normalizedEmail) 
     .eq('status', 'pending')
     .maybeSingle();
 
