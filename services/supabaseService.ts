@@ -176,18 +176,21 @@ export const fetchProjects = async (): Promise<Project[]> => {
         .select(`*, budgets(*)`)
         .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+        console.error("Fetch Projects Error:", error);
+        throw new Error("Failed to load projects. " + error.message);
+    }
     return data as Project[];
 };
 
-export const uploadBudget = async (projectId: number, versionName: string, xmlContent: string) => {
+export const uploadBudget = async (projectId: number, fileName: string, xmlContent: string) => {
     if (!supabase) throw new Error("Supabase not configured");
     
     const { error } = await supabase
         .from('budgets')
         .insert([{
             project_id: projectId,
-            version_name: versionName,
+            version_name: fileName,
             xml_content: xmlContent
         }]);
     
@@ -201,18 +204,10 @@ export const fetchAllProfiles = async (): Promise<Profile[]> => {
   const user = await getCurrentUser();
   if (!user) return [];
 
-  // Logic: 
-  // If Master User -> Fetch All (RLS allows)
-  // If Superuser -> Fetch users Invited By Me (RLS should handle this, but we can be explicit)
-  
   const { data, error } = await supabase
     .from('profiles')
     .select('*')
     .order('email');
-  
-  // NOTE: We rely on RLS policies to filter this list based on the caller's role.
-  // The 'tadekus' master user will see everyone.
-  // A Superuser will see only people they invited.
   
   if (error) throw error;
   return data as Profile[];
