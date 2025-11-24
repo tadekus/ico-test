@@ -99,10 +99,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
 
   const getRepairSql = () => {
     return `
--- 0. Drop existing function first to avoid "return type mismatch" errors
-DROP FUNCTION IF EXISTS claim_invited_role();
+-- REPAIR SCRIPT v2.0
+-- 1. Drop existing function explicitly to fix "return type mismatch" errors
+DROP FUNCTION IF EXISTS claim_invited_role() CASCADE;
 
--- 1. Create function to securely claim superuser role
+-- 2. Create function to securely claim superuser role
 -- SECURITY DEFINER = Runs with Admin privileges (Bypasses RLS)
 create or replace function claim_invited_role()
 returns text as $$
@@ -144,19 +145,27 @@ begin
 end;
 $$ language plpgsql security definer;
 
--- 2. Grant permission to run this function
+-- 3. Grant permission to run this function
 grant execute on function claim_invited_role to authenticated;
 
--- 3. Fix existing invited users (Retroactive Fix)
+-- 4. Fix existing invited users (Retroactive Fix)
 update profiles 
 set is_superuser = true 
 where lower(email) in (select lower(email) from user_invitations);
 
--- 4. Ensure RLS allows users to see their own invites
+-- 5. Ensure RLS allows users to see their own invites
 drop policy if exists "Read own invitation" on user_invitations;
 create policy "Read own invitation" on user_invitations 
 for select to authenticated 
 using ( lower(email) = lower(auth.jwt() ->> 'email') );
+
+-- 6. Ensure full_name column exists
+do $$ 
+begin
+    alter table profiles add column if not exists full_name text;
+exception
+    when others then null;
+end $$;
 `;
   };
 
