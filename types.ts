@@ -67,3 +67,8 @@ export interface UserInvitation {
   created_at: string;
   status: string; // 'pending' | 'accepted'
 }
+
+export interface SetPasswordProps {
+  onSuccess: () => void;
+  email: string;
+}

@@ -1,6 +1,90 @@
 
 import React, { useState } from 'react';
-import { signIn, signUp } from '../services/supabaseService';
+import { signIn, signUp, updateUserPassword } from '../services/supabaseService';
+import { SetPasswordProps } from '../types';
+
+export const SetPassword: React.FC<SetPasswordProps> = ({ onSuccess, email }) => {
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Password must be at least 6 characters");
+      return;
+    }
+    
+    setLoading(true);
+    setError(null);
+    try {
+      await updateUserPassword(password);
+      onSuccess();
+    } catch (err: any) {
+      setError(err.message || "Failed to set password");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+      <div className="max-w-md w-full bg-white rounded-xl shadow-lg p-8 border border-slate-100">
+        <div className="text-center mb-8">
+           <div className="inline-flex items-center justify-center w-12 h-12 bg-emerald-100 rounded-full mb-4">
+            <svg className="w-6 h-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900">Finalize Account</h2>
+          <p className="text-slate-500 mt-2 text-sm">
+            Welcome, {email}. Please set a password to complete your registration.
+          </p>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
+            <input
+              type="password"
+              required
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+            />
+          </div>
+          
+          {error && (
+            <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg">{error}</div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className={`w-full py-2.5 px-4 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors ${loading ? 'opacity-75 cursor-wait' : ''}`}
+          >
+            {loading ? 'Setting Password...' : 'Complete Registration'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
 
 const Auth: React.FC = () => {
   const [email, setEmail] = useState('');

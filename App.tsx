@@ -4,10 +4,10 @@ import Dropzone from './components/Dropzone';
 import ResultCard from './components/ResultCard';
 import InvoiceHistory from './components/InvoiceHistory';
 import AdminDashboard from './components/AdminDashboard';
-import Auth from './components/Auth';
+import Auth, { SetPassword } from './components/Auth';
 import { extractIcoFromDocument } from './services/geminiService';
 import { FileData, ExtractionResult, Profile } from './types';
-import { isSupabaseConfigured, signOut, supabase, getUserProfile } from './services/supabaseService';
+import { isSupabaseConfigured, signOut, supabase, getUserProfile, checkMyPendingInvitation, acceptInvitation } from './services/supabaseService';
 import { User } from '@supabase/supabase-js';
 
 function App() {
@@ -22,6 +22,7 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<Profile | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
+  const [hasPendingInvite, setHasPendingInvite] = useState(false);
 
   // Configuration Status Check
   const configStatus = {
@@ -53,6 +54,18 @@ function App() {
   const handleUserSession = async (currentUser: User | null) => {
     setUser(currentUser);
     if (currentUser) {
+      // 1. Check if this is an invited user who needs to set a password
+      // We do this BEFORE fetching profile or anything else
+      if (currentUser.email) {
+        const isPending = await checkMyPendingInvitation(currentUser.email);
+        if (isPending) {
+          setHasPendingInvite(true);
+          setIsLoadingSession(false);
+          return;
+        }
+      }
+
+      // 2. Normal Flow
       const profile = await getUserProfile(currentUser.id);
       
       // Check if user is disabled
@@ -68,8 +81,18 @@ function App() {
       setUserProfile(profile);
     } else {
       setUserProfile(null);
+      setHasPendingInvite(false);
     }
     setIsLoadingSession(false);
+  };
+
+  const handlePasswordSetSuccess = async () => {
+    if (user?.email) {
+      await acceptInvitation(user.email);
+      setHasPendingInvite(false);
+      // Reload profile to get new superuser status if trigger worked
+      if (user) handleUserSession(user);
+    }
   };
 
   const handleFileLoaded = async (data: FileData) => {
@@ -98,6 +121,7 @@ function App() {
     await signOut();
     setUser(null);
     setUserProfile(null);
+    setHasPendingInvite(false);
   };
 
   // Loading state
@@ -107,6 +131,11 @@ function App() {
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
       </div>
     );
+  }
+
+  // Intercept Pending Invites
+  if (hasPendingInvite && user?.email) {
+    return <SetPassword email={user.email} onSuccess={handlePasswordSetSuccess} />;
   }
 
   // If Supabase is configured but user is not logged in, show Auth screen
@@ -234,7 +263,7 @@ function App() {
       
       {/* Footer Version Indicator */}
       <div className="mt-12 text-center py-4 text-xs text-slate-300">
-        Movie Accountant v1.1
+        Movie Accountant v1.2
       </div>
     </div>
   );

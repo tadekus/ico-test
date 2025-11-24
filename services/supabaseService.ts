@@ -37,6 +37,12 @@ export const signOut = async () => {
   return await supabase.auth.signOut();
 };
 
+export const updateUserPassword = async (password: string) => {
+  if (!supabase) throw new Error("Supabase not configured");
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) throw error;
+};
+
 export const getCurrentUser = async () => {
   if (!supabase) return null;
   const { data: { session } } = await supabase.auth.getSession();
@@ -232,12 +238,12 @@ export const sendSystemInvitation = async (email: string) => {
   if (!supabase) throw new Error("Supabase not configured");
 
   // 1. Send Magic Link (OTP) via Supabase
+  // Redirect back to this app so they can set their password
   const { error: authError } = await supabase.auth.signInWithOtp({
     email,
     options: {
       shouldCreateUser: true,
-      // In production, set this to your app URL
-      // emailRedirectTo: window.location.origin 
+      emailRedirectTo: window.location.origin
     }
   });
 
@@ -268,6 +274,29 @@ export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
     
   if (error) throw error;
   return data as UserInvitation[];
+};
+
+export const checkMyPendingInvitation = async (email: string): Promise<boolean> => {
+  if (!supabase) return false;
+  // Use maybeSingle to avoid error if not found
+  const { data, error } = await supabase
+    .from('user_invitations')
+    .select('*')
+    .eq('email', email)
+    .eq('status', 'pending')
+    .maybeSingle();
+
+  if (error) return false;
+  return !!data;
+};
+
+export const acceptInvitation = async (email: string) => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('user_invitations')
+    .update({ status: 'accepted' })
+    .eq('email', email);
+  if (error) throw error;
 };
 
 export const deleteInvitation = async (id: number) => {

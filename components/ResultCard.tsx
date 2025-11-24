@@ -18,14 +18,12 @@ const ResultCard: React.FC<ResultCardProps> = ({ result, onReset }) => {
     setErrorMessage(null);
     
     try {
-      // For now, save without project ID (null). 
-      // In a full implementation, you'd select the project via a dropdown here.
       await saveExtractionResult(result);
       setSaveStatus('success');
     } catch (err: any) {
       setSaveStatus('error');
       if (err.code === '42P01' || err.message?.includes('relation')) {
-        setErrorMessage("Database tables missing. Please run the SQL setup script in Supabase.");
+        setErrorMessage("Database tables missing. Run Setup SQL in Supabase.");
       } else if (err.code === '42501') {
          setErrorMessage("Permission denied. Check RLS policies.");
       } else {
