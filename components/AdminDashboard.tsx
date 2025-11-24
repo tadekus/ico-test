@@ -61,7 +61,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
       setProjects(projs);
       setInvitations(invites);
     } catch (err: any) {
-      setError("Failed to load admin data");
+      setError("Failed to load admin data. ensure you have run the DB Setup SQL.");
     } finally {
       setLoading(false);
     }
@@ -178,10 +178,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     }
   };
 
+  // Check if master user is missing DB permissions
+  const isMasterButNotSuper = currentUserId && 
+    profiles.find(p => p.id === currentUserId && !p.is_superuser) && 
+    profiles.find(p => p.id === currentUserId)?.email?.toLowerCase() === 'tadekus@gmail.com';
+
   if (loading) return <div className="text-center py-10">Loading Admin Dashboard...</div>;
 
   return (
     <div className="space-y-8 animate-fade-in">
+      
+      {isMasterButNotSuper && (
+        <div className="bg-amber-100 border-l-4 border-amber-500 text-amber-700 p-4 rounded shadow-sm">
+          <p className="font-bold">⚠️ Permission Warning</p>
+          <p>You are recognized as the Master User in the App, but you do not have Superuser permissions in the Database yet.</p>
+          <p className="mt-2 text-sm">Please go to the "Invoicing" tab, click "DB Setup", and run the updated SQL command in Supabase.</p>
+        </div>
+      )}
 
       {/* 0. Invite User Section */}
       <div className="bg-gradient-to-r from-indigo-600 to-indigo-800 rounded-xl shadow-md p-6 text-white">

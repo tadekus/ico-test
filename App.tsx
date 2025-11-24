@@ -29,7 +29,7 @@ function App() {
     supabase: isSupabaseConfigured
   };
 
-  const isMasterUser = user?.email === 'tadekus@gmail.com';
+  const isMasterUser = user?.email?.toLowerCase() === 'tadekus@gmail.com';
   const hasAdminAccess = isMasterUser || (userProfile?.is_superuser ?? false);
 
   useEffect(() => {
@@ -115,8 +115,8 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50/50 py-8 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-6xl mx-auto space-y-8">
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50/50 py-8 px-4 sm:px-6 lg:px-8 flex flex-col">
+      <div className="max-w-6xl mx-auto space-y-8 flex-grow w-full">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="text-center md:text-left space-y-2 flex-1">
@@ -230,6 +230,11 @@ function App() {
           )}
           
         </div>
+      </div>
+      
+      {/* Footer Version Indicator */}
+      <div className="mt-12 text-center py-4 text-xs text-slate-300">
+        Movie Accountant v1.1
       </div>
     </div>
   );
