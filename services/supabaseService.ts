@@ -210,9 +210,7 @@ export const sendSystemInvitation = async (email: string) => {
   const user = await getCurrentUser();
   if (!user) throw new Error("You must be logged in to invite users.");
 
-  // 2. CRITICAL CHANGE: Insert Invitation into DB *BEFORE* sending Magic Link.
-  // This ensures that when the user is created by the magic link, 
-  // the database trigger can find this invitation and assign Superuser role immediately.
+  // 2. Insert Invitation into DB
   const { data: inviteData, error: dbError } = await supabase
     .from('user_invitations')
     .insert([{ 
@@ -225,13 +223,15 @@ export const sendSystemInvitation = async (email: string) => {
     
   if (dbError) {
     console.error("DB Insert Error:", dbError);
-    throw new Error("Failed to create invitation record.");
+    // Explicitly catch Permission Denied (42501)
+    if (dbError.code === '42501') {
+       throw new Error("Permission denied. You must run the 'Database Repair SQL' in the Admin tab.");
+    }
+    throw new Error(`Failed to create invitation: ${dbError.message}`);
   }
 
   try {
-    // 3. Send Magic Link (OTP) via Supabase
-    // Note: If this creates a new user, the Postgres Trigger will fire immediately.
-    // Since we inserted the invite in step 2, the trigger will find it and set is_superuser=true.
+    // 3. Send Magic Link
     const { error: authError } = await supabase.auth.signInWithOtp({
       email: targetEmail,
       options: {
@@ -241,12 +241,10 @@ export const sendSystemInvitation = async (email: string) => {
     });
 
     if (authError) {
-      // Rollback: If email fails, delete the DB record so we don't have a phantom invite
       await deleteInvitation(inviteData.id);
       throw authError;
     }
   } catch (err) {
-    // Rollback if any other error occurs
     await deleteInvitation(inviteData.id);
     throw err;
   }
