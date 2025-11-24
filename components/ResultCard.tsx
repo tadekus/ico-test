@@ -18,6 +18,13 @@ create table if not exists profiles (
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
+-- Add is_disabled column if it doesn't exist
+do $$ begin
+    alter table profiles add column is_disabled boolean default false;
+exception
+    when duplicate_column then null;
+end $$;
+
 -- Trigger to automatically create a profile when a user signs up
 create or replace function public.handle_new_user()
 returns trigger as $$

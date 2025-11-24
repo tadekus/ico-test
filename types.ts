@@ -41,6 +41,7 @@ export interface Profile {
   id: string;
   email: string;
   is_superuser: boolean;
+  is_disabled?: boolean;
   created_at: string;
 }
 

@@ -8,7 +8,7 @@ import {
   assignUserToProject, 
   removeAssignment,
   toggleSuperuser,
-  getUserProfile
+  toggleUserDisabled
 } from '../services/supabaseService';
 import { Profile, Project, ProjectAssignment, ProjectRole } from '../types';
 
@@ -28,6 +28,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const [newProjectName, setNewProjectName] = useState('');
   const [selectedUser, setSelectedUser] = useState('');
   const [selectedRole, setSelectedRole] = useState<ProjectRole>('lineproducer');
+  const [inviteEmail, setInviteEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -119,10 +120,61 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     }
   };
 
+  const handleToggleDisabled = async (profile: Profile) => {
+    if (profile.id === currentUserId) {
+      alert("You cannot disable your own account.");
+      return;
+    }
+    const newValue = !profile.is_disabled;
+    const action = newValue ? "DISABLE login for" : "ENABLE login for";
+    
+    if (window.confirm(`Are you sure you want to ${action} ${profile.email}?`)) {
+      try {
+        await toggleUserDisabled(profile.id, newValue);
+        setProfiles(profiles.map(p => p.id === profile.id ? {...p, is_disabled: newValue} : p));
+      } catch (err) {
+        setError("Failed to update status");
+      }
+    }
+  };
+
+  const handleSendInvite = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail) return;
+    
+    // Create mailto link
+    const subject = "Invitation to Movie Accountant App";
+    const body = `Hello,\n\nYou have been invited to join the Movie Accountant application.\n\nPlease sign up here: ${window.location.origin}\n\nBest regards,`;
+    
+    window.location.href = `mailto:${inviteEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    setInviteEmail('');
+  };
+
   if (loading) return <div className="text-center py-10">Loading Admin Dashboard...</div>;
 
   return (
     <div className="space-y-8 animate-fade-in">
+
+      {/* 0. Invite User Section */}
+      <div className="bg-gradient-to-r from-indigo-600 to-indigo-800 rounded-xl shadow-md p-6 text-white">
+        <h3 className="text-lg font-bold mb-2">Invite New User</h3>
+        <p className="text-indigo-100 text-sm mb-4">Send an email invitation to add a new Superuser or team member.</p>
+        <form onSubmit={handleSendInvite} className="flex gap-2 max-w-lg">
+          <input
+            type="email"
+            value={inviteEmail}
+            onChange={(e) => setInviteEmail(e.target.value)}
+            placeholder="colleague@example.com"
+            className="flex-1 px-4 py-2 rounded-lg text-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-300"
+          />
+          <button 
+            type="submit"
+            className="bg-white text-indigo-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-50 transition-colors"
+          >
+            Send Invite
+          </button>
+        </form>
+      </div>
       
       {/* 1. Project Management Section */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -252,50 +304,70 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
         </div>
       </div>
 
-      {/* 2. User Management (Superuser List) */}
+      {/* 2. User Management (All Users) */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-        <h3 className="text-lg font-bold text-slate-800 mb-4">All Registered Users</h3>
+        <h3 className="text-lg font-bold text-slate-800 mb-4">User Management</h3>
         <p className="text-sm text-slate-500 mb-4">
-          Toggle users to "Superuser" status to let them manage projects and teams.
+          Manage system access and superuser privileges.
         </p>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Email</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Joined</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Is Admin?</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Role</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-slate-200">
               {profiles.map(p => (
-                <tr key={p.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{p.email}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
-                    {new Date(p.created_at).toLocaleDateString()}
+                <tr key={p.id} className={`hover:bg-slate-50 ${p.is_disabled ? 'bg-slate-50' : ''}`}>
+                  <td className={`px-6 py-4 whitespace-nowrap text-sm ${p.is_disabled ? 'text-slate-400 line-through' : 'text-slate-900'}`}>
+                    {p.email}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
                     {p.is_superuser ? (
-                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                        Yes
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800">
+                        Superuser
                       </span>
                     ) : (
-                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-slate-100 text-slate-800">
-                        No
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-slate-100 text-slate-600">
+                        User
                       </span>
                     )}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    {p.is_disabled ? (
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                        Disabled
+                      </span>
+                    ) : (
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                        Active
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
                     <button
                       onClick={() => handleToggleSuperuser(p)}
-                      className={`text-xs px-3 py-1 rounded border transition-colors ${
+                      className={`text-xs px-2 py-1 rounded transition-colors ${
                         p.is_superuser 
-                        ? 'border-red-200 text-red-600 hover:bg-red-50' 
-                        : 'border-green-200 text-green-600 hover:bg-green-50'
+                        ? 'text-slate-500 hover:bg-slate-100' 
+                        : 'text-indigo-600 hover:bg-indigo-50'
                       }`}
                     >
-                      {p.is_superuser ? 'Demote' : 'Promote to Admin'}
+                      {p.is_superuser ? 'Remove Admin' : 'Make Admin'}
+                    </button>
+                    <button
+                      onClick={() => handleToggleDisabled(p)}
+                      className={`text-xs px-2 py-1 rounded transition-colors border ${
+                        p.is_disabled
+                        ? 'border-green-200 text-green-600 hover:bg-green-50'
+                        : 'border-red-200 text-red-500 hover:bg-red-50'
+                      }`}
+                    >
+                      {p.is_disabled ? 'Enable Login' : 'Disable Login'}
                     </button>
                   </td>
                 </tr>

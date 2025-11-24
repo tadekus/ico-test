@@ -133,6 +133,16 @@ export const toggleSuperuser = async (targetUserId: string, isSuper: boolean) =>
   if (error) throw error;
 };
 
+export const toggleUserDisabled = async (targetUserId: string, isDisabled: boolean) => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('profiles')
+    .update({ is_disabled: isDisabled })
+    .eq('id', targetUserId);
+  
+  if (error) throw error;
+};
+
 export const createProject = async (name: string) => {
   if (!supabase) return;
   const { data, error } = await supabase

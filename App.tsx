@@ -51,6 +51,17 @@ function App() {
     setUser(currentUser);
     if (currentUser) {
       const profile = await getUserProfile(currentUser.id);
+      
+      // Check if user is disabled
+      if (profile?.is_disabled) {
+        await signOut();
+        alert("Your account has been disabled by an administrator.");
+        setUser(null);
+        setUserProfile(null);
+        setIsLoadingSession(false);
+        return;
+      }
+      
       setUserProfile(profile);
     } else {
       setUserProfile(null);
