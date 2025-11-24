@@ -278,15 +278,21 @@ export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
 
 export const checkMyPendingInvitation = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
-  // Use maybeSingle to avoid error if not found
+  
+  // Ensure we compare lowercase to lowercase to avoid mismatches
+  const normalizedEmail = email.toLowerCase();
+
   const { data, error } = await supabase
     .from('user_invitations')
     .select('*')
-    .eq('email', email)
+    .ilike('email', normalizedEmail) // ilike for case-insensitive match
     .eq('status', 'pending')
     .maybeSingle();
 
-  if (error) return false;
+  if (error) {
+      console.warn("Check invitation error (RLS might be blocking):", error.message);
+      return false;
+  }
   return !!data;
 };
 
@@ -295,7 +301,7 @@ export const acceptInvitation = async (email: string) => {
   const { error } = await supabase
     .from('user_invitations')
     .update({ status: 'accepted' })
-    .eq('email', email);
+    .ilike('email', email); // ilike for safety
   if (error) throw error;
 };
 
