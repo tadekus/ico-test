@@ -77,7 +77,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
       await sendSystemInvitation(inviteEmail);
       setSuccessMsg(`Invitation sent to ${inviteEmail}`);
       setInviteEmail('');
-      // Refresh pending list
+      // Refresh pending list immediately
       const updatedInvites = await fetchPendingInvitations();
       setInvitations(updatedInvites);
     } catch (err: any) {
@@ -99,73 +99,78 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
 
   const getRepairSql = () => {
     return `
--- REPAIR SCRIPT v2.0
--- 1. Drop existing function explicitly to fix "return type mismatch" errors
+-- REPAIR SCRIPT v3.0 (Race Condition Fix)
+
+-- 1. DROP old functions
 DROP FUNCTION IF EXISTS claim_invited_role() CASCADE;
 
--- 2. Create function to securely claim superuser role
--- SECURITY DEFINER = Runs with Admin privileges (Bypasses RLS)
+-- 2. UPDATE TRIGGER to handle lower-case emails strictly
+create or replace function public.handle_new_user()
+returns trigger as $$
+declare
+  is_invited boolean;
+  user_email text;
+begin
+  -- Normalize email
+  user_email := lower(new.email);
+
+  -- Check invitations table FIRST
+  select exists(
+    select 1 from public.user_invitations 
+    where lower(email) = user_email
+  ) into is_invited;
+
+  insert into public.profiles (id, email, full_name, is_superuser, is_disabled)
+  values (
+    new.id, 
+    new.email, 
+    new.raw_user_meta_data->>'full_name',
+    is_invited, -- CRITICAL: If invite exists, this becomes TRUE
+    false
+  );
+  return new;
+end;
+$$ language plpgsql security definer;
+
+-- 3. RE-CREATE the Claim Role function (Fail-safe)
 create or replace function claim_invited_role()
 returns text as $$
 declare
   is_invited boolean;
   current_email text;
 begin
-  -- Set search path to ensure we use public tables
   set search_path = public, auth;
-
-  -- Get current user email safely
   select lower(email) into current_email from auth.users where id = auth.uid();
   
-  if current_email is null then
-    return 'No authenticated user found';
-  end if;
+  if current_email is null then return 'No user'; end if;
 
-  -- Check if invited (Case Insensitive)
   select exists(
     select 1 from public.user_invitations 
     where lower(email) = current_email
   ) into is_invited;
 
   if is_invited then
-    -- Update profile to superuser
-    update public.profiles 
-    set is_superuser = true 
-    where id = auth.uid();
-    
-    -- Mark invitation as accepted
-    update public.user_invitations
-    set status = 'accepted'
-    where lower(email) = current_email;
-    
-    return 'Role Claimed: Superuser assigned';
+    update public.profiles set is_superuser = true where id = auth.uid();
+    update public.user_invitations set status = 'accepted' where lower(email) = current_email;
+    return 'Role Claimed';
   else
-    return 'No invitation found for ' || current_email;
+    return 'No invitation';
   end if;
 end;
 $$ language plpgsql security definer;
-
--- 3. Grant permission to run this function
 grant execute on function claim_invited_role to authenticated;
 
--- 4. Fix existing invited users (Retroactive Fix)
-update profiles 
-set is_superuser = true 
-where lower(email) in (select lower(email) from user_invitations);
+-- 4. FIX EXISTING DATA
+update profiles set is_superuser = true where lower(email) in (select lower(email) from user_invitations);
 
--- 5. Ensure RLS allows users to see their own invites
+-- 5. ENSURE RLS
 drop policy if exists "Read own invitation" on user_invitations;
 create policy "Read own invitation" on user_invitations 
 for select to authenticated 
 using ( lower(email) = lower(auth.jwt() ->> 'email') );
 
--- 6. Ensure full_name column exists
-do $$ 
-begin
-    alter table profiles add column if not exists full_name text;
-exception
-    when others then null;
-end $$;
+-- 6. ENSURE MASTER USER
+update profiles set is_superuser = true where lower(email) = 'tadekus@gmail.com';
 `;
   };
 

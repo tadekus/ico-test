@@ -61,14 +61,10 @@ export const completeAccountSetup = async (password: string, fullName: string) =
     }
 
     // 3. FAIL-SAFE: Explicitly claim the invited role (Superuser)
-    // This calls the RPC function 'claim_invited_role' which checks user_invitations 
-    // and updates the profile.is_superuser flag on the server side.
     try {
       const { data: rpcData, error: rpcError } = await supabase.rpc('claim_invited_role');
       if (rpcError) {
         console.error("Role claim RPC failed:", rpcError);
-        // We don't throw here to avoid blocking the user if the RPC is missing,
-        // but it means they might not get superuser status immediately.
       } else {
         console.log("Role claim RPC result:", rpcData);
       }
@@ -164,17 +160,6 @@ export const fetchAllProfiles = async (): Promise<Profile[]> => {
   return data as Profile[];
 };
 
-// Note: Manual toggleSuperuser is kept in backend but removed from UI per request
-export const toggleSuperuser = async (targetUserId: string, isSuper: boolean) => {
-  if (!supabase) return;
-  const { error } = await supabase
-    .from('profiles')
-    .update({ is_superuser: isSuper })
-    .eq('id', targetUserId);
-  
-  if (error) throw error;
-};
-
 export const toggleUserDisabled = async (targetUserId: string, isDisabled: boolean) => {
   if (!supabase) return;
   const { error } = await supabase
@@ -185,112 +170,18 @@ export const toggleUserDisabled = async (targetUserId: string, isDisabled: boole
   if (error) throw error;
 };
 
-export const createProject = async (name: string) => {
-  if (!supabase) return;
-  const { data, error } = await supabase
-    .from('projects')
-    .insert([{ name }])
-    .select()
-    .single();
-  
-  if (error) {
-    if (error.code === '42501') {
-      throw new Error("Database permission denied. Run the SQL script to fix your Superuser status.");
-    }
-    throw error;
-  }
-  return data as Project;
-};
-
-export const fetchProjects = async (): Promise<Project[]> => {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('projects')
-    .select('*')
-    .order('created_at', { ascending: false });
-  
-  if (error) throw error;
-  return data as Project[];
-};
-
-export const fetchProjectAssignments = async (projectId: number): Promise<ProjectAssignment[]> => {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('project_assignments')
-    .select('*, profiles(email, full_name)')
-    .eq('project_id', projectId);
-    
-  if (error) throw error;
-  
-  // Transform to match interface
-  return data.map((item: any) => ({
-    id: item.id,
-    project_id: item.project_id,
-    user_id: item.user_id,
-    role: item.role,
-    profile: item.profiles // Joined data
-  }));
-};
-
-export const assignUserToProject = async (projectId: number, userId: string, role: ProjectRole) => {
-  if (!supabase) return;
-
-  // Check constraints before inserting
-  const existingAssignments = await fetchProjectAssignments(projectId);
-  
-  // 1. Check if user is already assigned to this project
-  if (existingAssignments.some(a => a.user_id === userId)) {
-    throw new Error("User is already assigned to this project.");
-  }
-
-  // 2. Check Role Limits
-  const roleCount = existingAssignments.filter(a => a.role === role).length;
-
-  if (role === 'lineproducer' && roleCount >= 1) {
-    throw new Error("Project can only have 1 Line Producer.");
-  }
-  if (role === 'accountant' && roleCount >= 2) {
-    throw new Error("Project can only have 2 Accountants.");
-  }
-  if (role === 'producer' && roleCount >= 2) {
-    throw new Error("Project can only have 2 Producers.");
-  }
-
-  const { error } = await supabase
-    .from('project_assignments')
-    .insert([{ project_id: projectId, user_id: userId, role }]);
-
-  if (error) {
-    if (error.code === '42501') {
-      throw new Error("Permission denied. Ensure you are a Superuser.");
-    }
-    throw error;
-  }
-};
-
-export const removeAssignment = async (assignmentId: number) => {
-  if (!supabase) return;
-  const { error } = await supabase
-    .from('project_assignments')
-    .delete()
-    .eq('id', assignmentId);
-    
-  if (error) throw error;
-};
-
 // --- INVITATIONS ---
 
 export const checkUserExists = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
   
-  // Normalizing email to lowercase to prevent duplicates
   const targetEmail = email.toLowerCase();
   
   // 1. Check existing profiles
   const { data: profile } = await supabase
     .from('profiles')
     .select('id')
-    .ilike('email', targetEmail) // ilike matches case insensitive
+    .ilike('email', targetEmail)
     .maybeSingle();
     
   if (profile) return true;
@@ -311,34 +202,53 @@ export const sendSystemInvitation = async (email: string) => {
 
   const targetEmail = email.trim().toLowerCase();
 
-  // Check for duplicates first
+  // 1. Check for duplicates FIRST
   if (await checkUserExists(targetEmail)) {
     throw new Error("User already exists or has a pending invitation.");
   }
 
-  // 1. Send Magic Link (OTP) via Supabase
-  const { error: authError } = await supabase.auth.signInWithOtp({
-    email: targetEmail,
-    options: {
-      shouldCreateUser: true,
-      emailRedirectTo: window.location.origin
-    }
-  });
-
-  if (authError) throw authError;
-
-  // 2. Log the invitation in our table
   const user = await getCurrentUser();
-  if (user) {
-    const { error: dbError } = await supabase
-      .from('user_invitations')
-      .insert([{ 
-        email: targetEmail, 
-        invited_by: user.id,
-        status: 'pending'
-      }]);
-      
-    if (dbError) console.warn("Invitation sent but failed to log to DB:", dbError.message);
+  if (!user) throw new Error("You must be logged in to invite users.");
+
+  // 2. CRITICAL CHANGE: Insert Invitation into DB *BEFORE* sending Magic Link.
+  // This ensures that when the user is created by the magic link, 
+  // the database trigger can find this invitation and assign Superuser role immediately.
+  const { data: inviteData, error: dbError } = await supabase
+    .from('user_invitations')
+    .insert([{ 
+      email: targetEmail, 
+      invited_by: user.id,
+      status: 'pending'
+    }])
+    .select()
+    .single();
+    
+  if (dbError) {
+    console.error("DB Insert Error:", dbError);
+    throw new Error("Failed to create invitation record.");
+  }
+
+  try {
+    // 3. Send Magic Link (OTP) via Supabase
+    // Note: If this creates a new user, the Postgres Trigger will fire immediately.
+    // Since we inserted the invite in step 2, the trigger will find it and set is_superuser=true.
+    const { error: authError } = await supabase.auth.signInWithOtp({
+      email: targetEmail,
+      options: {
+        shouldCreateUser: true,
+        emailRedirectTo: window.location.origin
+      }
+    });
+
+    if (authError) {
+      // Rollback: If email fails, delete the DB record so we don't have a phantom invite
+      await deleteInvitation(inviteData.id);
+      throw authError;
+    }
+  } catch (err) {
+    // Rollback if any other error occurs
+    await deleteInvitation(inviteData.id);
+    throw err;
   }
 };
 
@@ -357,7 +267,6 @@ export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
 export const checkMyPendingInvitation = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
   
-  // Ensure we compare lowercase to lowercase to avoid mismatches
   const normalizedEmail = email.trim().toLowerCase();
 
   const { data, error } = await supabase
@@ -368,8 +277,6 @@ export const checkMyPendingInvitation = async (email: string): Promise<boolean> 
     .maybeSingle();
 
   if (error) {
-      // If error is permission denied, it's likely RLS.
-      // But RLS policies should allow reading OWN email.
       console.warn("Check invitation error:", error.message);
       return false;
   }
