@@ -1,9 +1,13 @@
+
 import React, { useState, useEffect } from 'react';
 import Dropzone from './components/Dropzone';
 import ResultCard from './components/ResultCard';
 import InvoiceHistory from './components/InvoiceHistory';
+import Auth from './components/Auth';
 import { extractIcoFromDocument } from './services/geminiService';
 import { FileData, ExtractionResult } from './types';
+import { isSupabaseConfigured, signOut, supabase } from './services/supabaseService';
+import { User } from '@supabase/supabase-js';
 
 function App() {
   const [fileData, setFileData] = useState<FileData | null>(null);
@@ -11,11 +15,13 @@ function App() {
   const [result, setResult] = useState<ExtractionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'extract' | 'history'>('extract');
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoadingSession, setIsLoadingSession] = useState(true);
 
   // Configuration Status Check
   const configStatus = {
     gemini: !!process.env.API_KEY,
-    supabase: !!(process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY)
+    supabase: isSupabaseConfigured
   };
 
   useEffect(() => {
@@ -24,6 +30,23 @@ function App() {
       Gemini: configStatus.gemini ? "Set" : "Missing",
       Supabase: configStatus.supabase ? "Set" : "Missing"
     });
+
+    if (configStatus.supabase && supabase) {
+      // Check active session
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setUser(session?.user ?? null);
+        setIsLoadingSession(false);
+      });
+
+      // Listen for auth changes
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user ?? null);
+      });
+
+      return () => subscription.unsubscribe();
+    } else {
+      setIsLoadingSession(false);
+    }
   }, []);
 
   const handleFileLoaded = async (data: FileData) => {
@@ -48,22 +71,57 @@ function App() {
     setError(null);
   };
 
+  const handleSignOut = async () => {
+    await signOut();
+    setUser(null);
+  };
+
+  // Loading state
+  if (isLoadingSession) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
+  // If Supabase is configured but user is not logged in, show Auth screen
+  if (configStatus.supabase && !user) {
+    return <Auth />;
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50/50 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-4xl mx-auto space-y-8">
         {/* Header */}
-        <div className="text-center space-y-4">
-          <div className="inline-flex items-center justify-center p-3 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-200 mb-2">
-            <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
-            IČO & Invoice Extractor
-          </h1>
-          <p className="text-lg text-slate-600 max-w-lg mx-auto leading-relaxed">
-            Upload your invoice (PDF or Excel). We'll extract the Business ID, Bank Details, and Payment Amounts using Gemini AI.
-          </p>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="text-center md:text-left space-y-2 flex-1">
+              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center justify-center md:justify-start gap-3">
+                <div className="inline-flex items-center justify-center p-2 bg-indigo-600 rounded-lg shadow-md">
+                    <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                </div>
+                IČO Extractor
+              </h1>
+              <p className="text-slate-600 text-sm md:text-base">
+                Extract business details from PDF or Excel invoices using AI.
+              </p>
+            </div>
+            
+            {user && (
+              <div className="flex items-center justify-center gap-4 bg-white py-2 px-4 rounded-full shadow-sm border border-slate-200">
+                <div className="text-xs text-slate-500">
+                  <span className="block font-medium text-slate-800">{user.email}</span>
+                </div>
+                <button 
+                  onClick={handleSignOut}
+                  className="text-xs font-medium text-red-500 hover:text-red-700 hover:underline"
+                >
+                  Sign Out
+                </button>
+              </div>
+            )}
         </div>
 
         {/* Configuration Warning Banner */}
@@ -97,26 +155,26 @@ function App() {
         {/* Navigation Tabs */}
         {configStatus.supabase && (
           <div className="flex justify-center mb-6">
-            <div className="bg-slate-100 p-1 rounded-lg inline-flex">
+            <div className="bg-slate-100 p-1 rounded-lg inline-flex shadow-inner">
               <button
                 onClick={() => setActiveTab('extract')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                className={`px-6 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
                   activeTab === 'extract'
-                    ? 'bg-white text-indigo-600 shadow-sm'
+                    ? 'bg-white text-indigo-600 shadow-sm transform scale-[1.02]'
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                New Extraction
+                Extractor
               </button>
               <button
                 onClick={() => setActiveTab('history')}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                className={`px-6 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
                   activeTab === 'history'
-                    ? 'bg-white text-indigo-600 shadow-sm'
+                    ? 'bg-white text-indigo-600 shadow-sm transform scale-[1.02]'
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                History
+                My Invoices
               </button>
             </div>
           </div>
@@ -133,11 +191,11 @@ function App() {
                   <div className="mt-6 flex items-center justify-center space-x-6 text-sm text-slate-400">
                     <span className="flex items-center">
                       <span className={`w-2 h-2 rounded-full mr-2 ${configStatus.gemini ? 'bg-green-400' : 'bg-red-400'}`}></span>
-                      Gemini 2.5 Flash
+                      Gemini AI
                     </span>
                     <span className="flex items-center">
-                      <span className={`w-2 h-2 rounded-full mr-2 ${configStatus.supabase ? 'bg-blue-400' : 'bg-slate-300'}`}></span>
-                      Supabase Database
+                      <span className={`w-2 h-2 rounded-full mr-2 ${configStatus.supabase ? 'bg-green-400' : 'bg-slate-300'}`}></span>
+                      Secure Database
                     </span>
                   </div>
                 </div>
@@ -189,20 +247,6 @@ function App() {
           )}
           
         </div>
-        
-        <footer className="text-center text-xs py-4 space-y-2">
-          <div className="text-slate-400">Powered by Google Gemini 2.5 Flash</div>
-          <div className="flex justify-center space-x-4">
-             <div className="flex items-center text-slate-400" title="API_KEY">
-               <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${configStatus.gemini ? 'bg-emerald-400' : 'bg-red-400'}`}></div>
-               Gemini API: {configStatus.gemini ? 'Connected' : 'Missing'}
-             </div>
-             <div className="flex items-center text-slate-400" title="SUPABASE_URL & KEY">
-               <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${configStatus.supabase ? 'bg-blue-400' : 'bg-slate-300'}`}></div>
-               Supabase: {configStatus.supabase ? 'Connected' : 'Not Configured'}
-             </div>
-          </div>
-        </footer>
       </div>
     </div>
   );

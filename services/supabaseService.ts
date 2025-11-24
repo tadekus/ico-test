@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 import { ExtractionResult, SavedInvoice } from '../types';
 
@@ -7,13 +8,52 @@ const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
 export const isSupabaseConfigured = !!(supabaseUrl && supabaseKey);
 
-const supabase = isSupabaseConfigured 
+export const supabase = isSupabaseConfigured 
   ? createClient(supabaseUrl!, supabaseKey!) 
   : null;
+
+// --- AUTHENTICATION ---
+
+export const signUp = async (email: string, password: string) => {
+  if (!supabase) throw new Error("Supabase not configured");
+  return await supabase.auth.signUp({
+    email,
+    password,
+  });
+};
+
+export const signIn = async (email: string, password: string) => {
+  if (!supabase) throw new Error("Supabase not configured");
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) throw error;
+  return data;
+};
+
+export const signOut = async () => {
+  if (!supabase) throw new Error("Supabase not configured");
+  return await supabase.auth.signOut();
+};
+
+export const getCurrentUser = async () => {
+  if (!supabase) return null;
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.user ?? null;
+};
+
+// --- DATABASE OPERATIONS ---
 
 export const saveExtractionResult = async (result: ExtractionResult) => {
   if (!supabase) {
     throw new Error("Supabase is not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY.");
+  }
+
+  // Get current user for RLS
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new Error("You must be logged in to save invoices.");
   }
 
   // Assuming a table named 'invoices' exists with these columns
@@ -21,6 +61,7 @@ export const saveExtractionResult = async (result: ExtractionResult) => {
     .from('invoices')
     .insert([
       {
+        user_id: user.id, // Explicitly set user_id for RLS
         ico: result.ico,
         company_name: result.companyName,
         bank_account: result.bankAccount,
@@ -37,7 +78,7 @@ export const saveExtractionResult = async (result: ExtractionResult) => {
 
   if (error) {
     console.error("Supabase Error:", error);
-    // Throw the full error object so we can check the code (e.g. 42P01 for missing table)
+    // Throw the full error object so we can check the code (e.g. 42P01 for missing table, 42501 for RLS)
     throw error;
   }
   
@@ -47,6 +88,11 @@ export const saveExtractionResult = async (result: ExtractionResult) => {
 export const fetchInvoices = async (): Promise<SavedInvoice[]> => {
   if (!supabase) {
     throw new Error("Supabase is not configured.");
+  }
+
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new Error("You must be logged in to view history.");
   }
 
   const { data, error } = await supabase
