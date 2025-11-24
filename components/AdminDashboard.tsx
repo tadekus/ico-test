@@ -186,6 +186,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
 create table if not exists profiles (
   id uuid references auth.users on delete cascade primary key,
   email text,
+  full_name text,
   is_superuser boolean default false,
   is_disabled boolean default false,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
@@ -275,6 +276,10 @@ do $$ begin
   drop policy if exists "Superusers update profiles" on profiles;
   create policy "Superusers update profiles" on profiles for update to authenticated 
     using (exists (select 1 from profiles where id = auth.uid() and is_superuser = true));
+    
+  drop policy if exists "Users update own profile" on profiles;
+  create policy "Users update own profile" on profiles for update to authenticated 
+    using (id = auth.uid());
 
   -- Projects
   drop policy if exists "Superusers full projects" on projects;
@@ -454,7 +459,7 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
                       >
                         <option value="">Select User...</option>
                         {profiles.map(p => (
-                          <option key={p.id} value={p.id}>{p.email} {p.is_superuser ? '(Admin)' : ''}</option>
+                          <option key={p.id} value={p.id}>{p.full_name || p.email} {p.is_superuser ? '(Admin)' : ''}</option>
                         ))}
                       </select>
                       <div className="flex gap-2">
@@ -489,7 +494,7 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
                               'bg-blue-500'
                           }`}></span>
                           <div>
-                            <p className="text-sm font-medium text-slate-700">{a.profile?.email}</p>
+                            <p className="text-sm font-medium text-slate-700">{a.profile?.full_name || a.profile?.email}</p>
                             <p className="text-xs text-slate-400 capitalize">{a.role}</p>
                           </div>
                         </div>
@@ -529,7 +534,7 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Email</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">User</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Role</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase">Actions</th>
@@ -538,7 +543,10 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
             <tbody className="bg-white divide-y divide-slate-200">
               {profiles.map(p => (
                 <tr key={p.id} className={`hover:bg-slate-50 ${p.is_disabled ? 'opacity-60 bg-slate-50' : ''}`}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">{p.email}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                    <div>{p.full_name || 'No Name'}</div>
+                    <div className="text-xs text-slate-400">{p.email}</div>
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
                     {p.is_superuser ? (
                       <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-indigo-100 text-indigo-800">Superuser</span>

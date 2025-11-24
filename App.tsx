@@ -4,7 +4,7 @@ import Dropzone from './components/Dropzone';
 import ResultCard from './components/ResultCard';
 import InvoiceHistory from './components/InvoiceHistory';
 import AdminDashboard from './components/AdminDashboard';
-import Auth, { SetPassword } from './components/Auth';
+import Auth, { SetupAccount } from './components/Auth';
 import { extractIcoFromDocument } from './services/geminiService';
 import { FileData, ExtractionResult, Profile } from './types';
 import { isSupabaseConfigured, signOut, supabase, getUserProfile, checkMyPendingInvitation, acceptInvitation } from './services/supabaseService';
@@ -86,12 +86,13 @@ function App() {
     setIsLoadingSession(false);
   };
 
-  const handlePasswordSetSuccess = async () => {
+  const handleSetupSuccess = async () => {
     if (user?.email) {
       await acceptInvitation(user.email);
       setHasPendingInvite(false);
-      // Reload profile to get new superuser status if trigger worked
-      if (user) handleUserSession(user);
+      // Force Sign Out so they can log in manually
+      await signOut();
+      alert("Account setup complete! Please sign in with your new password.");
     }
   };
 
@@ -133,9 +134,9 @@ function App() {
     );
   }
 
-  // Intercept Pending Invites
+  // Intercept Pending Invites -> Show Setup Screen
   if (hasPendingInvite && user?.email) {
-    return <SetPassword email={user.email} onSuccess={handlePasswordSetSuccess} />;
+    return <SetupAccount email={user.email} onSuccess={handleSetupSuccess} />;
   }
 
   // If Supabase is configured but user is not logged in, show Auth screen
@@ -165,7 +166,7 @@ function App() {
             {user && (
               <div className="flex items-center justify-center gap-4 bg-white py-2 px-4 rounded-full shadow-sm border border-slate-200">
                 <div className="text-xs text-slate-500">
-                  <span className="block font-medium text-slate-800">{user.email}</span>
+                  <span className="block font-medium text-slate-800">{userProfile?.full_name || user.email}</span>
                   {(hasAdminAccess) && (
                     <span className="text-indigo-600 font-bold">Administrator</span>
                   )}
@@ -263,7 +264,7 @@ function App() {
       
       {/* Footer Version Indicator */}
       <div className="mt-12 text-center py-4 text-xs text-slate-300">
-        Movie Accountant v1.2
+        Movie Accountant v1.3
       </div>
     </div>
   );

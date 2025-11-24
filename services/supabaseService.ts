@@ -37,10 +37,23 @@ export const signOut = async () => {
   return await supabase.auth.signOut();
 };
 
-export const updateUserPassword = async (password: string) => {
+export const completeAccountSetup = async (password: string, fullName: string) => {
   if (!supabase) throw new Error("Supabase not configured");
-  const { error } = await supabase.auth.updateUser({ password });
-  if (error) throw error;
+  
+  // 1. Update Auth Password
+  const { error: authError } = await supabase.auth.updateUser({ password });
+  if (authError) throw authError;
+
+  // 2. Update Profile Name
+  const user = await getCurrentUser();
+  if (user) {
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .update({ full_name: fullName })
+      .eq('id', user.id);
+    
+    if (profileError) throw profileError;
+  }
 };
 
 export const getCurrentUser = async () => {
@@ -176,7 +189,7 @@ export const fetchProjectAssignments = async (projectId: number): Promise<Projec
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('project_assignments')
-    .select('*, profiles(email)')
+    .select('*, profiles(email, full_name)')
     .eq('project_id', projectId);
     
   if (error) throw error;

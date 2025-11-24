@@ -40,6 +40,7 @@ export interface FileData {
 export interface Profile {
   id: string;
   email: string;
+  full_name?: string;
   is_superuser: boolean;
   is_disabled?: boolean;
   created_at: string;
@@ -68,7 +69,7 @@ export interface UserInvitation {
   status: string; // 'pending' | 'accepted'
 }
 
-export interface SetPasswordProps {
+export interface SetupAccountProps {
   onSuccess: () => void;
   email: string;
 }

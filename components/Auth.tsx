@@ -1,9 +1,10 @@
 
 import React, { useState } from 'react';
-import { signIn, signUp, updateUserPassword } from '../services/supabaseService';
-import { SetPasswordProps } from '../types';
+import { signIn, signUp, completeAccountSetup } from '../services/supabaseService';
+import { SetupAccountProps } from '../types';
 
-export const SetPassword: React.FC<SetPasswordProps> = ({ onSuccess, email }) => {
+export const SetupAccount: React.FC<SetupAccountProps> = ({ onSuccess, email }) => {
+  const [fullName, setFullName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -19,14 +20,18 @@ export const SetPassword: React.FC<SetPasswordProps> = ({ onSuccess, email }) =>
       setError("Password must be at least 6 characters");
       return;
     }
+    if (!fullName.trim()) {
+      setError("Please enter your full name");
+      return;
+    }
     
     setLoading(true);
     setError(null);
     try {
-      await updateUserPassword(password);
+      await completeAccountSetup(password, fullName);
       onSuccess();
     } catch (err: any) {
-      setError(err.message || "Failed to set password");
+      setError(err.message || "Failed to complete setup");
     } finally {
       setLoading(false);
     }
@@ -41,13 +46,24 @@ export const SetPassword: React.FC<SetPasswordProps> = ({ onSuccess, email }) =>
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <h2 className="text-2xl font-bold text-slate-900">Finalize Account</h2>
+          <h2 className="text-2xl font-bold text-slate-900">Setup Your Account</h2>
           <p className="text-slate-500 mt-2 text-sm">
-            Welcome, {email}. Please set a password to complete your registration.
+            Welcome, {email}. Please provide your details to activate your Superuser account.
           </p>
         </div>
         
         <form onSubmit={handleSubmit} className="space-y-6">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+            <input
+              type="text"
+              required
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+              placeholder="John Doe"
+            />
+          </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">New Password</label>
             <input
@@ -78,7 +94,7 @@ export const SetPassword: React.FC<SetPasswordProps> = ({ onSuccess, email }) =>
             disabled={loading}
             className={`w-full py-2.5 px-4 rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition-colors ${loading ? 'opacity-75 cursor-wait' : ''}`}
           >
-            {loading ? 'Setting Password...' : 'Complete Registration'}
+            {loading ? 'Saving...' : 'Finalize & Go to Login'}
           </button>
         </form>
       </div>
