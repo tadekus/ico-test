@@ -24,6 +24,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const [isInviting, setIsInviting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [showSql, setShowSql] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -94,6 +95,54 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     } catch(err) {
       setError("Failed to revoke invitation");
     }
+  };
+
+  const getRepairSql = () => {
+    return `
+-- 1. Create function to securely claim superuser role based on invitation
+create or replace function claim_invited_role()
+returns void as $$
+declare
+  is_invited boolean;
+  current_email text;
+begin
+  -- Get current user email safely
+  select lower(email) into current_email from auth.users where id = auth.uid();
+  
+  -- Check if invited
+  select exists(
+    select 1 from public.user_invitations 
+    where lower(email) = current_email
+  ) into is_invited;
+
+  if is_invited then
+    -- Update profile to superuser
+    update public.profiles 
+    set is_superuser = true 
+    where id = auth.uid();
+    
+    -- Mark invitation as accepted
+    update public.user_invitations
+    set status = 'accepted'
+    where lower(email) = current_email;
+  end if;
+end;
+$$ language plpgsql security definer;
+
+-- 2. Grant permission to run this function
+grant execute on function claim_invited_role to authenticated;
+
+-- 3. Fix existing invited users (Retroactive Fix)
+update profiles 
+set is_superuser = true 
+where lower(email) in (select lower(email) from user_invitations);
+
+-- 4. Ensure RLS allows users to see their own invites
+drop policy if exists "Read own invitation" on user_invitations;
+create policy "Read own invitation" on user_invitations 
+for select to authenticated 
+using ( lower(email) = lower(auth.jwt() ->> 'email') );
+`;
   };
 
   if (loading) return (
@@ -246,6 +295,37 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Database Repair Section */}
+      <div className="mt-12 pt-8 border-t border-slate-200">
+        <button 
+          onClick={() => setShowSql(!showSql)}
+          className="text-slate-400 text-xs hover:text-indigo-600 font-medium underline"
+        >
+          {showSql ? 'Hide Database Tools' : 'Show Database Repair Tools'}
+        </button>
+        
+        {showSql && (
+          <div className="mt-4 bg-slate-900 rounded-lg p-6">
+            <h4 className="text-white font-bold mb-2">Database Repair SQL</h4>
+            <p className="text-slate-400 text-xs mb-4">
+              Run this SQL in Supabase to fix the &quot;Invited users are not Superusers&quot; issue.
+              It creates a backend function that the app calls during setup.
+            </p>
+            <div className="relative">
+              <pre className="bg-black text-emerald-400 p-4 rounded text-xs font-mono overflow-x-auto">
+                {getRepairSql()}
+              </pre>
+              <button 
+                onClick={() => navigator.clipboard.writeText(getRepairSql())}
+                className="absolute top-2 right-2 bg-slate-700 hover:bg-slate-600 text-white text-xs px-3 py-1 rounded"
+              >
+                Copy SQL
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
     </div>

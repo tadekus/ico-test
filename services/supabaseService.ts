@@ -59,6 +59,20 @@ export const completeAccountSetup = async (password: string, fullName: string) =
        }
        throw profileError;
     }
+
+    // 3. FAIL-SAFE: Explicitly claim the invited role (Superuser)
+    // This calls the RPC function 'claim_invited_role' which checks user_invitations 
+    // and updates the profile.is_superuser flag on the server side.
+    try {
+      const { error: rpcError } = await supabase.rpc('claim_invited_role');
+      if (rpcError) {
+        console.warn("Role claim failed:", rpcError.message);
+        // We don't throw here to avoid blocking the user if the RPC is missing,
+        // but it means they might not get superuser status immediately.
+      }
+    } catch (e) {
+      console.warn("RPC call error", e);
+    }
   }
 };
 
