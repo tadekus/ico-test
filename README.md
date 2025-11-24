@@ -1,31 +1,52 @@
 # IČO & Invoice Extractor Configuration
 
-This application requires API keys to function. These keys must be set as environment variables to keep them secure.
+This application requires API keys to function.
 
-## Quick Setup
+## 1. Get Your Keys
 
-1. Create a file named `.env` in the root directory of this project.
-2. Copy and paste the following template into that file:
+### Google Gemini API
+- **Link**: [https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+- **Key**: `API_KEY`
 
-```bash
-# -----------------------------
-# Google Gemini API (Required)
-# -----------------------------
-# Get your key here: https://aistudio.google.com/app/apikey
-API_KEY=paste_your_gemini_key_here
+### Supabase
+- **Link**: [https://supabase.com/dashboard](https://supabase.com/dashboard) -> Select Project -> Project Settings -> API
+- **URL**: `SUPABASE_URL`
+- **Key**: `SUPABASE_ANON_KEY` (use the `anon public` key)
 
-# -----------------------------
-# Supabase Database (Optional)
-# -----------------------------
-# Find these in Supabase Dashboard: Project Settings > API
-SUPABASE_URL=paste_your_supabase_url
-SUPABASE_ANON_KEY=paste_your_supabase_anon_key
-```
+---
 
-3. Save the file.
-4. Restart your development server (e.g., `npm run dev` or stop/start the preview).
+## 2. Local Development Setup
 
-## Troubleshooting
+1. Create a file named `.env` in the root directory.
+2. Paste your keys:
+   ```bash
+   API_KEY=your_gemini_key
+   SUPABASE_URL=your_supabase_url
+   SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+3. Run `npm run dev`.
 
-- **Keys not detected?** Make sure the file is named exactly `.env` (no extension like .txt).
-- **Changes not showing?** Environment variables are loaded when the application starts. You must restart the server after changing them.
+---
+
+## 3. Deployment on Render.com
+
+Since you cannot upload `.env` files to Render, you must set them in the dashboard.
+
+1. Go to your **Render Dashboard**.
+2. Select your Service.
+3. Click **Environment** in the left sidebar.
+4. Click **Add Environment Variable**.
+5. Add all 3 keys (`API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`).
+6. **Trigger a new deployment** (Manual Deploy -> Clear Cache & Deploy) so the build process can read these variables.
+
+---
+
+## 4. Database Setup
+
+The app requires a table named `invoices` in Supabase.
+
+1. Open your app.
+2. Process an invoice.
+3. Click **Save to DB**.
+4. If the table is missing, a **"DB Setup"** panel will appear with the SQL code.
+5. Copy that code and run it in the **Supabase SQL Editor**.

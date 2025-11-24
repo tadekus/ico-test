@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { ExtractionResult } from '../types';
+import { ExtractionResult, SavedInvoice } from '../types';
 
 // These should be set in your environment variables
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -42,4 +42,38 @@ export const saveExtractionResult = async (result: ExtractionResult) => {
   }
   
   return data;
+};
+
+export const fetchInvoices = async (): Promise<SavedInvoice[]> => {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { data, error } = await supabase
+    .from('invoices')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error("Error fetching invoices:", error);
+    throw error;
+  }
+
+  return data as SavedInvoice[];
+};
+
+export const deleteInvoice = async (id: number): Promise<void> => {
+  if (!supabase) {
+    throw new Error("Supabase is not configured.");
+  }
+
+  const { error } = await supabase
+    .from('invoices')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error("Error deleting invoice:", error);
+    throw error;
+  }
 };
