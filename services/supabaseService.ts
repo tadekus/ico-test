@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation } from '../types';
+import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget } from '../types';
 
 // These should be set in your environment variables
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -60,7 +60,7 @@ export const completeAccountSetup = async (password: string, fullName: string) =
        throw profileError;
     }
 
-    // 3. FAIL-SAFE: Explicitly claim the invited role (Superuser)
+    // 3. FAIL-SAFE: Explicitly claim the invited role (Superuser or Team Member)
     try {
       const { data: rpcData, error: rpcError } = await supabase.rpc('claim_invited_role');
       if (rpcError) {
@@ -147,14 +147,72 @@ export const deleteInvoice = async (id: number): Promise<void> => {
   if (error) throw error;
 };
 
-// --- DATABASE OPERATIONS: ADMIN & PROJECTS ---
+// --- PROJECTS & BUDGETS ---
+
+export const createProject = async (name: string, currency: string): Promise<Project> => {
+    if (!supabase) throw new Error("Supabase not configured");
+    const user = await getCurrentUser();
+    if (!user) throw new Error("User not logged in");
+
+    const { data, error } = await supabase
+        .from('projects')
+        .insert([{ 
+            name, 
+            currency,
+            created_by: user.id
+        }])
+        .select()
+        .single();
+    
+    if (error) throw error;
+    return data as Project;
+};
+
+export const fetchProjects = async (): Promise<Project[]> => {
+    if (!supabase) return [];
+    // RLS Policies will ensure users only see projects they created or are assigned to
+    const { data, error } = await supabase
+        .from('projects')
+        .select(`*, budgets(*)`)
+        .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data as Project[];
+};
+
+export const uploadBudget = async (projectId: number, versionName: string, xmlContent: string) => {
+    if (!supabase) throw new Error("Supabase not configured");
+    
+    const { error } = await supabase
+        .from('budgets')
+        .insert([{
+            project_id: projectId,
+            version_name: versionName,
+            xml_content: xmlContent
+        }]);
+    
+    if (error) throw error;
+};
+
+// --- ADMIN: PROFILES & HIERARCHY ---
 
 export const fetchAllProfiles = async (): Promise<Profile[]> => {
   if (!supabase) return [];
+  const user = await getCurrentUser();
+  if (!user) return [];
+
+  // Logic: 
+  // If Master User -> Fetch All (RLS allows)
+  // If Superuser -> Fetch users Invited By Me (RLS should handle this, but we can be explicit)
+  
   const { data, error } = await supabase
     .from('profiles')
     .select('*')
     .order('email');
+  
+  // NOTE: We rely on RLS policies to filter this list based on the caller's role.
+  // The 'tadekus' master user will see everyone.
+  // A Superuser will see only people they invited.
   
   if (error) throw error;
   return data as Profile[];
@@ -197,7 +255,7 @@ export const checkUserExists = async (email: string): Promise<boolean> => {
   return !!invite;
 };
 
-export const sendSystemInvitation = async (email: string) => {
+export const sendSystemInvitation = async (email: string, role?: ProjectRole | null, projectId?: number | null) => {
   if (!supabase) throw new Error("Supabase not configured");
 
   const targetEmail = email.trim().toLowerCase();
@@ -210,20 +268,22 @@ export const sendSystemInvitation = async (email: string) => {
   const user = await getCurrentUser();
   if (!user) throw new Error("You must be logged in to invite users.");
 
-  // 2. Insert Invitation into DB
+  // 2. Insert Invitation into DB (Reverse Order logic to fix race condition)
+  // Store target_role and project_id for automatic assignment later
   const { data: inviteData, error: dbError } = await supabase
     .from('user_invitations')
     .insert([{ 
       email: targetEmail, 
       invited_by: user.id,
-      status: 'pending'
+      status: 'pending',
+      target_role: role || null,
+      target_project_id: projectId || null
     }])
     .select()
     .single();
     
   if (dbError) {
     console.error("DB Insert Error:", dbError);
-    // Explicitly catch Permission Denied (42501)
     if (dbError.code === '42501') {
        throw new Error("Permission denied. You must run the 'Database Repair SQL' in the Admin tab.");
     }
@@ -252,6 +312,7 @@ export const sendSystemInvitation = async (email: string) => {
 
 export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
   if (!supabase) return [];
+  // RLS will filter: Master sees all, Superuser sees own invites
   const { data, error } = await supabase
     .from('user_invitations')
     .select('*')
@@ -264,7 +325,6 @@ export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
 
 export const checkMyPendingInvitation = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
-  
   const normalizedEmail = email.trim().toLowerCase();
 
   const { data, error } = await supabase

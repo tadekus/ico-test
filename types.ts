@@ -35,7 +35,7 @@ export interface FileData {
   type: 'pdf' | 'excel' | 'image';
 }
 
-// --- NEW TYPES FOR USER MANAGEMENT ---
+// --- USER MANAGEMENT ---
 
 export interface Profile {
   id: string;
@@ -43,13 +43,25 @@ export interface Profile {
   full_name?: string;
   is_superuser: boolean;
   is_disabled?: boolean;
+  invited_by?: string;
+  created_at: string;
+}
+
+export interface Budget {
+  id: number;
+  project_id: number;
+  version_name: string;
+  xml_content: string;
   created_at: string;
 }
 
 export interface Project {
   id: number;
   name: string;
+  currency: string;
+  created_by?: string;
   created_at: string;
+  budgets?: Budget[];
 }
 
 export type ProjectRole = 'lineproducer' | 'producer' | 'accountant';
@@ -67,6 +79,9 @@ export interface UserInvitation {
   email: string;
   created_at: string;
   status: string; // 'pending' | 'accepted'
+  invited_by: string;
+  target_role?: ProjectRole | null;
+  target_project_id?: number | null;
 }
 
 export interface SetupAccountProps {
