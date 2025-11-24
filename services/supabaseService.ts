@@ -66,9 +66,11 @@ export const completeAccountSetup = async (password: string, fullName: string) =
     try {
       const { error: rpcError } = await supabase.rpc('claim_invited_role');
       if (rpcError) {
-        console.warn("Role claim failed:", rpcError.message);
+        console.error("Role claim RPC failed:", rpcError);
         // We don't throw here to avoid blocking the user if the RPC is missing,
         // but it means they might not get superuser status immediately.
+      } else {
+        console.log("Successfully claimed superuser role via RPC.");
       }
     } catch (e) {
       console.warn("RPC call error", e);

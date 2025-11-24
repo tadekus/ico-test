@@ -99,7 +99,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
 
   const getRepairSql = () => {
     return `
--- 1. Create function to securely claim superuser role based on invitation
+-- 1. Create function to securely claim superuser role
+-- SECURITY DEFINER = Runs with Admin privileges (Bypasses RLS)
 create or replace function claim_invited_role()
 returns void as $$
 declare
@@ -109,7 +110,7 @@ begin
   -- Get current user email safely
   select lower(email) into current_email from auth.users where id = auth.uid();
   
-  -- Check if invited
+  -- Check if invited (Case Insensitive)
   select exists(
     select 1 from public.user_invitations 
     where lower(email) = current_email
