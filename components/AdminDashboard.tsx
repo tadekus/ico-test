@@ -2,17 +2,12 @@
 import React, { useState, useEffect } from 'react';
 import { 
   fetchAllProfiles, 
-  fetchProjects, 
-  createProject, 
-  fetchProjectAssignments, 
-  assignUserToProject, 
-  removeAssignment,
   toggleUserDisabled,
   sendSystemInvitation,
   fetchPendingInvitations,
   deleteInvitation
 } from '../services/supabaseService';
-import { Profile, Project, ProjectAssignment, ProjectRole, UserInvitation } from '../types';
+import { Profile, UserInvitation } from '../types';
 
 interface AdminDashboardProps {
   currentUserId: string;
@@ -21,16 +16,10 @@ interface AdminDashboardProps {
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   // Data State
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [activeProject, setActiveProject] = useState<Project | null>(null);
-  const [assignments, setAssignments] = useState<ProjectAssignment[]>([]);
   const [invitations, setInvitations] = useState<UserInvitation[]>([]);
 
   // UI State
   const [loading, setLoading] = useState(true);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [selectedUser, setSelectedUser] = useState('');
-  const [selectedRole, setSelectedRole] = useState<ProjectRole>('lineproducer');
   const [inviteEmail, setInviteEmail] = useState('');
   const [isInviting, setIsInviting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,76 +29,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     loadData();
   }, []);
 
-  useEffect(() => {
-    if (activeProject) {
-      loadAssignments(activeProject.id);
-    } else {
-      setAssignments([]);
-    }
-  }, [activeProject]);
-
   const loadData = async () => {
     setLoading(true);
     try {
-      const [profs, projs, invites] = await Promise.all([
+      const [profs, invites] = await Promise.all([
         fetchAllProfiles(),
-        fetchProjects(),
         fetchPendingInvitations()
       ]);
       setProfiles(profs);
-      setProjects(projs);
       setInvitations(invites);
     } catch (err: any) {
       console.error(err);
       setError("Failed to load dashboard data. Check database permissions.");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadAssignments = async (projectId: number) => {
-    try {
-      const data = await fetchProjectAssignments(projectId);
-      setAssignments(data);
-    } catch (err) {
-      setError("Failed to load assignments");
-    }
-  };
-
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProjectName.trim()) return;
-    setError(null);
-    try {
-      const newProj = await createProject(newProjectName);
-      if (newProj) {
-        setProjects([newProj, ...projects]);
-        setNewProjectName('');
-        setActiveProject(newProj);
-      }
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
-
-  const handleAssignUser = async () => {
-    if (!activeProject || !selectedUser) return;
-    setError(null);
-    try {
-      await assignUserToProject(activeProject.id, selectedUser, selectedRole);
-      await loadAssignments(activeProject.id);
-      setSelectedUser('');
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
-
-  const handleRemoveAssignment = async (id: number) => {
-    try {
-      await removeAssignment(id);
-      setAssignments(assignments.filter(a => a.id !== id));
-    } catch (err: any) {
-      setError("Failed to remove user");
     }
   };
 
@@ -183,69 +116,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         
-        {/* Left Col: Projects & Invites */}
+        {/* Left Col: Invitations */}
         <div className="space-y-8">
           
-          {/* Project Creation */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-            <div className="flex items-center justify-between mb-4">
-               <h3 className="text-lg font-bold text-slate-800">Projects</h3>
-               <span className="text-xs text-slate-400 bg-slate-50 px-2 py-1 rounded-full border border-slate-100">
-                 {projects.length} Total
-               </span>
-            </div>
-            
-            <form onSubmit={handleCreateProject} className="flex gap-2 mb-6">
-              <input
-                type="text"
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
-                placeholder="New Project Name"
-                className="flex-1 px-4 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-              />
-              <button type="submit" className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-indigo-700 shadow-sm transition-colors font-medium">
-                Create
-              </button>
-            </form>
-
-            <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
-              {projects.map(p => (
-                <div 
-                  key={p.id}
-                  onClick={() => setActiveProject(p)}
-                  className={`p-4 rounded-lg cursor-pointer transition-all border group ${
-                    activeProject?.id === p.id 
-                    ? 'bg-indigo-50 border-indigo-200 shadow-sm' 
-                    : 'bg-white border-slate-100 hover:border-indigo-300 hover:shadow-sm'
-                  }`}
-                >
-                  <div className="flex justify-between items-center">
-                    <span className={`font-medium ${activeProject?.id === p.id ? 'text-indigo-900' : 'text-slate-700'}`}>
-                      {p.name}
-                    </span>
-                    {activeProject?.id === p.id && (
-                       <svg className="w-5 h-5 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                       </svg>
-                    )}
-                  </div>
-                </div>
-              ))}
-              {projects.length === 0 && (
-                <div className="text-center py-8 border-2 border-dashed border-slate-100 rounded-lg">
-                  <p className="text-sm text-slate-400">No projects created yet.</p>
-                </div>
-              )}
-            </div>
-          </div>
-
           {/* Invite Section */}
-          <div className="bg-slate-800 rounded-xl shadow-md p-6 text-white">
+          <div className="bg-slate-800 rounded-xl shadow-md p-6 text-white h-fit">
             <h3 className="text-lg font-bold mb-2 flex items-center">
               <svg className="w-5 h-5 mr-2 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
               </svg>
-              Invite Administrator
+              Invite User
             </h3>
             <p className="text-slate-400 text-xs mb-4">
               Invited users will receive full <strong>Superuser</strong> access upon registration.
@@ -269,12 +149,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
             </form>
             {successMsg && <p className="text-emerald-400 text-xs mt-3 font-medium flex items-center"><span className="mr-1">✓</span> {successMsg}</p>}
           </div>
+        </div>
 
-          {/* Pending Invitations */}
-          {invitations.length > 0 && (
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+        {/* Right Col: Pending Invites */}
+        <div className="space-y-8">
+          {invitations.length > 0 ? (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-fit">
                 <h3 className="text-sm uppercase tracking-wide font-bold text-slate-500 mb-4">Pending Invites</h3>
-                <div className="space-y-2">
+                <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                   {invitations.map(inv => (
                     <div key={inv.id} className="flex items-center justify-between bg-slate-50 border border-slate-100 rounded-lg p-3">
                       <div className="flex flex-col">
@@ -291,116 +173,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
                   ))}
                 </div>
             </div>
+          ) : (
+             <div className="bg-slate-50 rounded-xl border border-dashed border-slate-200 p-8 text-center h-fit flex flex-col items-center justify-center text-slate-400">
+               <svg className="w-10 h-10 mb-2 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+               </svg>
+               <p className="text-sm">No pending invitations.</p>
+             </div>
           )}
-        </div>
-
-        {/* Right Col: Team Management */}
-        <div className="space-y-8">
-           {/* Team Assignments */}
-           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 min-h-[500px] flex flex-col">
-              {activeProject ? (
-                <>
-                  <div className="flex justify-between items-start mb-6 pb-4 border-b border-slate-100">
-                    <div>
-                      <h3 className="text-xl font-bold text-slate-800">{activeProject.name}</h3>
-                      <p className="text-sm text-slate-500 mt-1">Manage Team & Roles</p>
-                    </div>
-                    <div className="text-right">
-                       <span className="bg-indigo-50 text-indigo-700 text-xs font-mono px-2 py-1 rounded">
-                        ID: {activeProject.id}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Add Member */}
-                  <div className="bg-slate-50 p-5 rounded-xl mb-6 border border-slate-100">
-                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 block">Assign Team Member</label>
-                    <div className="grid grid-cols-1 gap-3">
-                      <select 
-                        value={selectedUser}
-                        onChange={(e) => setSelectedUser(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                      >
-                        <option value="">Select User...</option>
-                        {profiles.map(p => (
-                          <option key={p.id} value={p.id}>{p.full_name || p.email} {p.is_superuser ? '★' : ''}</option>
-                        ))}
-                      </select>
-                      <div className="flex gap-2">
-                        <select 
-                          value={selectedRole}
-                          onChange={(e) => setSelectedRole(e.target.value as ProjectRole)}
-                          className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                        >
-                          <option value="lineproducer">Line Producer</option>
-                          <option value="producer">Producer</option>
-                          <option value="accountant">Accountant</option>
-                        </select>
-                        <button 
-                          onClick={handleAssignUser}
-                          disabled={!selectedUser}
-                          className="bg-slate-800 text-white px-6 py-2 rounded-lg text-sm hover:bg-slate-900 disabled:opacity-50 transition-colors shadow-sm"
-                        >
-                          Assign
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Assignments List */}
-                  <div className="flex-1">
-                    <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3 block">Current Team</label>
-                    <div className="space-y-3">
-                      {assignments.map(a => (
-                        <div key={a.id} className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-lg hover:border-slate-300 transition-colors group">
-                          <div className="flex items-center">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center mr-3 ${
-                                a.role === 'lineproducer' ? 'bg-purple-100 text-purple-600' :
-                                a.role === 'producer' ? 'bg-amber-100 text-amber-600' :
-                                'bg-blue-100 text-blue-600'
-                            }`}>
-                              <span className="text-xs font-bold">{a.role[0].toUpperCase()}</span>
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-slate-700">{a.profile?.full_name || a.profile?.email}</p>
-                              <p className="text-xs text-slate-400 capitalize">{a.role}</p>
-                            </div>
-                          </div>
-                          <button 
-                            onClick={() => handleRemoveAssignment(a.id)}
-                            className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all p-2"
-                            title="Remove User"
-                          >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
-                        </div>
-                      ))}
-                      {assignments.length === 0 && (
-                        <div className="text-center py-12 bg-slate-50 rounded-lg border border-dashed border-slate-200">
-                          <p className="text-sm text-slate-400">No team members assigned.</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-slate-400">
-                  <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-4">
-                    <svg className="w-8 h-8 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                    </svg>
-                  </div>
-                  <h4 className="text-slate-900 font-medium mb-1">No Project Selected</h4>
-                  <p className="text-sm max-w-xs text-center">Select a project from the left list to manage team assignments and roles.</p>
-                </div>
-              )}
-           </div>
         </div>
       </div>
 
-      {/* 3. User Management Table */}
+      {/* Full Width: User Management Table */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
         <h3 className="text-lg font-bold text-slate-800 mb-4">All Registered Users</h3>
         <div className="overflow-x-auto">
