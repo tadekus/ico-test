@@ -7,7 +7,6 @@ import {
   fetchProjectAssignments, 
   assignUserToProject, 
   removeAssignment,
-  toggleSuperuser,
   toggleUserDisabled,
   sendSystemInvitation,
   fetchPendingInvitations,
@@ -38,6 +37,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [showSql, setShowSql] = useState(false);
 
+  // Check if master user is missing DB permissions
+  const isMasterButNotSuper = currentUserId && 
+    profiles.length > 0 &&
+    profiles.find(p => p.id === currentUserId && !p.is_superuser) && 
+    profiles.find(p => p.id === currentUserId)?.email?.toLowerCase() === 'tadekus@gmail.com';
+
   useEffect(() => {
     loadData();
   }, []);
@@ -49,6 +54,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
       setAssignments([]);
     }
   }, [activeProject]);
+
+  // Auto-open SQL panel if permissions are missing
+  useEffect(() => {
+    if (isMasterButNotSuper) {
+      setShowSql(true);
+    }
+  }, [isMasterButNotSuper]);
 
   const loadData = async () => {
     setLoading(true);
@@ -62,7 +74,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
       setProjects(projs);
       setInvitations(invites);
     } catch (err: any) {
-      setError("Failed to load admin data. ensure you have run the DB Setup SQL.");
+      console.error(err);
+      // Don't show error immediately to avoid flashing, but logging it
     } finally {
       setLoading(false);
     }
@@ -80,6 +93,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim()) return;
+    setError(null);
     try {
       const newProj = await createProject(newProjectName);
       if (newProj) {
@@ -110,22 +124,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
       setAssignments(assignments.filter(a => a.id !== id));
     } catch (err: any) {
       setError("Failed to remove user");
-    }
-  };
-
-  const handleToggleSuperuser = async (profile: Profile) => {
-    if (profile.id === currentUserId) {
-      alert("You cannot remove your own superuser status.");
-      return;
-    }
-    const newValue = !profile.is_superuser;
-    if (window.confirm(`Make ${profile.email} ${newValue ? 'a Superuser' : 'a regular user'}?`)) {
-      try {
-        await toggleSuperuser(profile.id, newValue);
-        setProfiles(profiles.map(p => p.id === profile.id ? {...p, is_superuser: newValue} : p));
-      } catch (err) {
-        setError("Failed to update role");
-      }
     }
   };
 
@@ -204,13 +202,19 @@ end $$;
 create or replace function public.handle_new_user()
 returns trigger as $$
 declare
-  has_invite boolean;
+  is_invited boolean;
 begin
-  -- Check if invited
-  select exists(select 1 from public.user_invitations where email = new.email and status = 'pending') into has_invite;
+  -- Check if there is a pending invitation for this email (Case Insensitive)
+  select exists(
+    select 1 from public.user_invitations 
+    where lower(email) = lower(new.email) 
+    and status = 'pending'
+  ) into is_invited;
   
+  -- If invited, they AUTOMATICALLY become a Superuser
   insert into public.profiles (id, email, is_superuser, is_disabled)
-  values (new.id, new.email, has_invite, false);
+  values (new.id, new.email, is_invited, false);
+  
   return new;
 end;
 $$ language plpgsql security definer;
@@ -325,15 +329,10 @@ do $$ begin
     using ( lower(email) = lower(auth.jwt() ->> 'email') );
 end $$;
 
--- 8. SET MASTER USER
+-- 8. SET MASTER USER (Force update permission)
 update profiles set is_superuser = true where email = 'tadekus@gmail.com';
 `;
   };
-
-  // Check if master user is missing DB permissions
-  const isMasterButNotSuper = currentUserId && 
-    profiles.find(p => p.id === currentUserId && !p.is_superuser) && 
-    profiles.find(p => p.id === currentUserId)?.email?.toLowerCase() === 'tadekus@gmail.com';
 
   if (loading) return <div className="text-center py-10">Loading Admin Dashboard...</div>;
 
@@ -342,9 +341,20 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
       
       {isMasterButNotSuper && (
         <div className="bg-amber-100 border-l-4 border-amber-500 text-amber-700 p-4 rounded shadow-sm">
-          <p className="font-bold">⚠️ Permission Warning</p>
-          <p>You are recognized as the Master User in the App, but you do not have Superuser permissions in the Database yet.</p>
-          <p className="mt-2 text-sm">Please scroll down to "Database & Configuration" and run the SQL script in Supabase.</p>
+          <p className="font-bold text-lg">⚠️ Action Required: Fix Database Permissions</p>
+          <p className="mt-1">
+            You are logged in as the Master User, but the database blocks you from creating projects.
+          </p>
+          <p className="mt-2 text-sm font-semibold">
+            Please run the SQL script below in Supabase to fix your Superuser status.
+          </p>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-lg">
+          <p className="font-bold">Error</p>
+          <p>{error}</p>
         </div>
       )}
 
@@ -357,7 +367,7 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
           <div className="bg-gradient-to-r from-indigo-600 to-indigo-800 rounded-xl shadow-md p-6 text-white">
             <h3 className="text-lg font-bold mb-2">Invite New User</h3>
             <p className="text-indigo-100 text-sm mb-4">
-              Send a magic link. User will be prompted to set a password upon clicking.
+              Send a magic link. Invited users are automatically granted <strong>Superuser</strong> access.
             </p>
             <form onSubmit={handleSendInvite} className="flex flex-col sm:flex-row gap-2">
               <input
@@ -377,7 +387,6 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
               </button>
             </form>
             {successMsg && <p className="text-emerald-300 text-sm mt-2">✓ {successMsg}</p>}
-            {error && <p className="text-red-300 text-sm mt-2">⚠ {error}</p>}
           </div>
 
           {/* Pending Invitations */}
@@ -436,6 +445,9 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
                   </div>
                 </div>
               ))}
+              {projects.length === 0 && (
+                <p className="text-sm text-slate-400 italic text-center py-4">No projects yet.</p>
+              )}
             </div>
           </div>
 
@@ -571,17 +583,14 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
                     <button
-                      onClick={() => handleToggleSuperuser(p)}
-                      className="text-xs text-indigo-600 hover:text-indigo-900"
-                    >
-                      {p.is_superuser ? 'Demote' : 'Promote'}
-                    </button>
-                    <span className="text-slate-300">|</span>
-                    <button
                       onClick={() => handleToggleDisabled(p)}
-                      className={`text-xs ${p.is_disabled ? 'text-green-600 hover:text-green-900' : 'text-red-500 hover:text-red-700'}`}
+                      className={`text-xs px-2 py-1 rounded border ${
+                          p.is_disabled 
+                          ? 'border-green-200 text-green-600 hover:bg-green-50' 
+                          : 'border-red-200 text-red-500 hover:bg-red-50'
+                      }`}
                     >
-                      {p.is_disabled ? 'Enable' : 'Disable'}
+                      {p.is_disabled ? 'Enable Login' : 'Disable Login'}
                     </button>
                   </td>
                 </tr>
@@ -592,7 +601,7 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
       </div>
 
       {/* 4. Database Config Section */}
-      <div className="bg-slate-800 rounded-xl shadow-lg p-6 text-slate-300">
+      <div className={`bg-slate-800 rounded-xl shadow-lg p-6 text-slate-300 transition-all ${showSql ? 'ring-4 ring-indigo-400 ring-opacity-50' : ''}`}>
         <div className="flex justify-between items-center mb-4">
           <div>
             <h3 className="text-lg font-bold text-white">Database & Configuration</h3>
@@ -607,7 +616,7 @@ update profiles set is_superuser = true where email = 'tadekus@gmail.com';
         </div>
         
         {showSql && (
-          <div className="relative">
+          <div className="relative animate-fade-in">
             <textarea
               readOnly
               className="w-full h-64 bg-slate-900 font-mono text-xs p-4 rounded-lg text-emerald-400 focus:outline-none"

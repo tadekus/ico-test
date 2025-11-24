@@ -148,6 +148,7 @@ export const fetchAllProfiles = async (): Promise<Profile[]> => {
   return data as Profile[];
 };
 
+// Note: Manual toggleSuperuser is kept in backend but removed from UI per request
 export const toggleSuperuser = async (targetUserId: string, isSuper: boolean) => {
   if (!supabase) return;
   const { error } = await supabase
@@ -176,7 +177,12 @@ export const createProject = async (name: string) => {
     .select()
     .single();
   
-  if (error) throw error;
+  if (error) {
+    if (error.code === '42501') {
+      throw new Error("Database permission denied. Run the SQL script to fix your Superuser status.");
+    }
+    throw error;
+  }
   return data as Project;
 };
 
@@ -238,7 +244,12 @@ export const assignUserToProject = async (projectId: number, userId: string, rol
     .from('project_assignments')
     .insert([{ project_id: projectId, user_id: userId, role }]);
 
-  if (error) throw error;
+  if (error) {
+    if (error.code === '42501') {
+      throw new Error("Permission denied. Ensure you are a Superuser.");
+    }
+    throw error;
+  }
 };
 
 export const removeAssignment = async (assignmentId: number) => {
