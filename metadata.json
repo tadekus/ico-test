@@ -1,0 +1,5 @@
+{
+  "name": "Rašple 2.0",
+  "description": "Extract Czech Business ID (IČO) from PDF or Excel invoices using Gemini AI.",
+  "requestFramePermissions": []
+}
