@@ -17,10 +17,3 @@ export interface FileData {
   textContent?: string; // For Excel parsed content
   type: 'pdf' | 'excel' | 'image';
 }
-
-// Extend Window interface for SheetJS
-declare global {
-  interface Window {
-    XLSX: any;
-  }
-}

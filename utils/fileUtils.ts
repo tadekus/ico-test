@@ -1,4 +1,5 @@
 import { FileData } from '../types';
+import * as XLSX from 'xlsx';
 
 export const readFile = (file: File): Promise<FileData> => {
   return new Promise((resolve, reject) => {
@@ -43,21 +44,16 @@ export const readFile = (file: File): Promise<FileData> => {
 
 const parseExcel = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
-    if (!window.XLSX) {
-      reject(new Error("Excel parser library not loaded."));
-      return;
-    }
-
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const data = e.target?.result;
-        const workbook = window.XLSX.read(data, { type: 'binary' });
+        const workbook = XLSX.read(data, { type: 'binary' });
         let combinedText = "Document Content (Excel Export):\n";
 
         workbook.SheetNames.forEach((sheetName: string) => {
           const sheet = workbook.Sheets[sheetName];
-          const csv = window.XLSX.utils.sheet_to_csv(sheet);
+          const csv = XLSX.utils.sheet_to_csv(sheet);
           combinedText += `\n--- Sheet: ${sheetName} ---\n${csv}`;
         });
 
