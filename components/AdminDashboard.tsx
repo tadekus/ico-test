@@ -45,37 +45,55 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const [uploadingBudget, setUploadingBudget] = useState(false);
 
   useEffect(() => {
+    // Initial email check from prop or session
+    // We will refine this once profiles load
     loadData();
-    // Get current email from profiles if possible, or just checking auth
-    const masterCheck = profiles.find(p => p.id === currentUserId);
-    if(masterCheck) setCurrentUserEmail(masterCheck.email);
   }, []);
 
   const isMasterUser = (email: string) => email?.toLowerCase() === 'tadekus@gmail.com';
-  // We determine Master status based on a hardcoded check for the specific email for UI rendering
-  const amIMaster = isMasterUser(currentUserEmail || 'tadekus@gmail.com'); // This will update once data loads
+  
+  // We determine Master status based on the current user's email
+  const amIMaster = isMasterUser(currentUserEmail || 'tadekus@gmail.com');
 
   const loadData = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const [profs, invites, projs] = await Promise.all([
-        fetchAllProfiles(),
-        fetchPendingInvitations(),
-        fetchProjects()
-      ]);
-      setProfiles(profs);
-      setInvitations(invites);
+      // 1. Fetch Projects (Superusers need this first)
+      const projs = await fetchProjects().catch(e => {
+        console.warn("Failed to fetch projects:", e);
+        return [];
+      });
       setProjects(projs);
-      
-      const me = profs.find(p => p.id === currentUserId);
-      if(me) setCurrentUserEmail(me.email);
 
-      // Default active tab based on role
-      if (me && isMasterUser(me.email)) {
-          setActiveTab('users');
-      } else {
-          setActiveTab('projects');
+      // 2. Fetch Invitations
+      const invites = await fetchPendingInvitations().catch(e => {
+        console.warn("Failed to fetch invites:", e);
+        return [];
+      });
+      setInvitations(invites);
+
+      // 3. Fetch Profiles (This was causing the recursion crash)
+      const profs = await fetchAllProfiles().catch(e => {
+        console.error("Critical: Failed to fetch profiles:", e);
+        setError("Database permission error. Please run the SQL fix script.");
+        return [];
+      });
+      setProfiles(profs);
+      
+      // Update current user email from profile if found
+      const me = profs.find(p => p.id === currentUserId);
+      if(me) {
+        setCurrentUserEmail(me.email);
+        // Reset tab logic based on confirmed identity
+        if (isMasterUser(me.email)) {
+            setActiveTab('users');
+        } else if (activeTab === 'users') {
+            // If I'm not master but tab is 'users' (default), switch to projects
+            setActiveTab('projects');
+        }
       }
+
     } catch (err: any) {
       console.error(err);
       setError("Failed to load dashboard data. Permissions might need fixing.");
@@ -121,7 +139,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
       setIsCreatingProject(true);
       setError(null);
       try {
-          const newProj = await createProject(projectName, projectCurrency);
+          await createProject(projectName, projectCurrency);
           // Refresh list to include new project and any budget structures
           const updatedProjs = await fetchProjects(); 
           setProjects(updatedProjs);
@@ -186,7 +204,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
 
   return (
     <div className="space-y-8 animate-fade-in pb-12">
-      {error && <div className="bg-red-50 text-red-600 p-4 rounded-lg">{error}</div>}
+      {error && (
+        <div className="bg-red-50 border border-red-100 text-red-700 p-4 rounded-lg flex flex-col gap-2">
+          <p className="font-bold flex items-center">
+            <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            Error
+          </p>
+          <p>{error}</p>
+        </div>
+      )}
+      
       {successMsg && <div className="bg-emerald-50 text-emerald-600 p-4 rounded-lg">{successMsg}</div>}
       
       {/* TABS FOR SUPERUSERS */}
