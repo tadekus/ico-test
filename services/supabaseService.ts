@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { ExtractionResult, SavedInvoice } from '../types';
+import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole } from '../types';
 
 // These should be set in your environment variables
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -43,25 +43,32 @@ export const getCurrentUser = async () => {
   return session?.user ?? null;
 };
 
-// --- DATABASE OPERATIONS ---
+export const getUserProfile = async (userId: string): Promise<Profile | null> => {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .single();
+  
+  if (error) return null;
+  return data as Profile;
+};
 
-export const saveExtractionResult = async (result: ExtractionResult) => {
-  if (!supabase) {
-    throw new Error("Supabase is not configured. Please set SUPABASE_URL and SUPABASE_ANON_KEY.");
-  }
+// --- DATABASE OPERATIONS: INVOICES ---
 
-  // Get current user for RLS
+export const saveExtractionResult = async (result: ExtractionResult, projectId?: number) => {
+  if (!supabase) throw new Error("Supabase not configured.");
+
   const user = await getCurrentUser();
-  if (!user) {
-    throw new Error("You must be logged in to save invoices.");
-  }
+  if (!user) throw new Error("You must be logged in.");
 
-  // Assuming a table named 'invoices' exists with these columns
   const { data, error } = await supabase
     .from('invoices')
     .insert([
       {
-        user_id: user.id, // Explicitly set user_id for RLS
+        user_id: user.id,
+        project_id: projectId || null,
         ico: result.ico,
         company_name: result.companyName,
         bank_account: result.bankAccount,
@@ -76,50 +83,135 @@ export const saveExtractionResult = async (result: ExtractionResult) => {
     ])
     .select();
 
-  if (error) {
-    console.error("Supabase Error:", error);
-    // Throw the full error object so we can check the code (e.g. 42P01 for missing table, 42501 for RLS)
-    throw error;
-  }
-  
+  if (error) throw error;
   return data;
 };
 
 export const fetchInvoices = async (): Promise<SavedInvoice[]> => {
-  if (!supabase) {
-    throw new Error("Supabase is not configured.");
-  }
-
-  const user = await getCurrentUser();
-  if (!user) {
-    throw new Error("You must be logged in to view history.");
-  }
+  if (!supabase) throw new Error("Supabase is not configured.");
 
   const { data, error } = await supabase
     .from('invoices')
     .select('*')
     .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error("Error fetching invoices:", error);
-    throw error;
-  }
-
+  if (error) throw error;
   return data as SavedInvoice[];
 };
 
 export const deleteInvoice = async (id: number): Promise<void> => {
-  if (!supabase) {
-    throw new Error("Supabase is not configured.");
-  }
+  if (!supabase) throw new Error("Supabase is not configured.");
 
   const { error } = await supabase
     .from('invoices')
     .delete()
     .eq('id', id);
 
-  if (error) {
-    console.error("Error deleting invoice:", error);
-    throw error;
+  if (error) throw error;
+};
+
+// --- DATABASE OPERATIONS: ADMIN & PROJECTS ---
+
+export const fetchAllProfiles = async (): Promise<Profile[]> => {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .order('email');
+  
+  if (error) throw error;
+  return data as Profile[];
+};
+
+export const toggleSuperuser = async (targetUserId: string, isSuper: boolean) => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('profiles')
+    .update({ is_superuser: isSuper })
+    .eq('id', targetUserId);
+  
+  if (error) throw error;
+};
+
+export const createProject = async (name: string) => {
+  if (!supabase) return;
+  const { data, error } = await supabase
+    .from('projects')
+    .insert([{ name }])
+    .select()
+    .single();
+  
+  if (error) throw error;
+  return data as Project;
+};
+
+export const fetchProjects = async (): Promise<Project[]> => {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('projects')
+    .select('*')
+    .order('created_at', { ascending: false });
+  
+  if (error) throw error;
+  return data as Project[];
+};
+
+export const fetchProjectAssignments = async (projectId: number): Promise<ProjectAssignment[]> => {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('project_assignments')
+    .select('*, profiles(email)')
+    .eq('project_id', projectId);
+    
+  if (error) throw error;
+  
+  // Transform to match interface
+  return data.map((item: any) => ({
+    id: item.id,
+    project_id: item.project_id,
+    user_id: item.user_id,
+    role: item.role,
+    profile: item.profiles // Joined data
+  }));
+};
+
+export const assignUserToProject = async (projectId: number, userId: string, role: ProjectRole) => {
+  if (!supabase) return;
+
+  // Check constraints before inserting
+  const existingAssignments = await fetchProjectAssignments(projectId);
+  
+  // 1. Check if user is already assigned to this project
+  if (existingAssignments.some(a => a.user_id === userId)) {
+    throw new Error("User is already assigned to this project.");
   }
+
+  // 2. Check Role Limits
+  const roleCount = existingAssignments.filter(a => a.role === role).length;
+
+  if (role === 'lineproducer' && roleCount >= 1) {
+    throw new Error("Project can only have 1 Line Producer.");
+  }
+  if (role === 'accountant' && roleCount >= 2) {
+    throw new Error("Project can only have 2 Accountants.");
+  }
+  if (role === 'producer' && roleCount >= 2) {
+    throw new Error("Project can only have 2 Producers.");
+  }
+
+  const { error } = await supabase
+    .from('project_assignments')
+    .insert([{ project_id: projectId, user_id: userId, role }]);
+
+  if (error) throw error;
+};
+
+export const removeAssignment = async (assignmentId: number) => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('project_assignments')
+    .delete()
+    .eq('id', assignmentId);
+    
+  if (error) throw error;
 };
