@@ -99,6 +99,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
 
   const getRepairSql = () => {
     return `
+-- 0. Drop existing function first to avoid "return type mismatch" errors
+DROP FUNCTION IF EXISTS claim_invited_role();
+
 -- 1. Create function to securely claim superuser role
 -- SECURITY DEFINER = Runs with Admin privileges (Bypasses RLS)
 create or replace function claim_invited_role()
