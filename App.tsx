@@ -29,6 +29,9 @@ function App() {
     supabase: isSupabaseConfigured
   };
 
+  const isMasterUser = user?.email === 'tadekus@gmail.com';
+  const hasAdminAccess = isMasterUser || (userProfile?.is_superuser ?? false);
+
   useEffect(() => {
     if (configStatus.supabase && supabase) {
       // Check active session
@@ -134,7 +137,7 @@ function App() {
               <div className="flex items-center justify-center gap-4 bg-white py-2 px-4 rounded-full shadow-sm border border-slate-200">
                 <div className="text-xs text-slate-500">
                   <span className="block font-medium text-slate-800">{user.email}</span>
-                  {userProfile?.is_superuser && (
+                  {(hasAdminAccess) && (
                     <span className="text-indigo-600 font-bold">Administrator</span>
                   )}
                 </div>
@@ -168,7 +171,7 @@ function App() {
               >
                 My Invoices
               </button>
-              {userProfile?.is_superuser && (
+              {hasAdminAccess && (
                 <button
                   onClick={() => setActiveTab('admin')}
                   className={`px-6 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
@@ -222,7 +225,7 @@ function App() {
             </div>
           )}
 
-          {activeTab === 'admin' && user && userProfile?.is_superuser && (
+          {activeTab === 'admin' && user && hasAdminAccess && (
             <AdminDashboard currentUserId={user.id} />
           )}
           

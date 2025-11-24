@@ -60,3 +60,10 @@ export interface ProjectAssignment {
   role: ProjectRole;
   profile?: Profile; // Joined data
 }
+
+export interface UserInvitation {
+  id: number;
+  email: string;
+  created_at: string;
+  status: string; // 'pending' | 'accepted'
+}

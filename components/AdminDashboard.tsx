@@ -8,9 +8,12 @@ import {
   assignUserToProject, 
   removeAssignment,
   toggleSuperuser,
-  toggleUserDisabled
+  toggleUserDisabled,
+  sendSystemInvitation,
+  fetchPendingInvitations,
+  deleteInvitation
 } from '../services/supabaseService';
-import { Profile, Project, ProjectAssignment, ProjectRole } from '../types';
+import { Profile, Project, ProjectAssignment, ProjectRole, UserInvitation } from '../types';
 
 interface AdminDashboardProps {
   currentUserId: string;
@@ -22,6 +25,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [assignments, setAssignments] = useState<ProjectAssignment[]>([]);
+  const [invitations, setInvitations] = useState<UserInvitation[]>([]);
 
   // UI State
   const [loading, setLoading] = useState(true);
@@ -29,7 +33,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const [selectedUser, setSelectedUser] = useState('');
   const [selectedRole, setSelectedRole] = useState<ProjectRole>('lineproducer');
   const [inviteEmail, setInviteEmail] = useState('');
+  const [isInviting, setIsInviting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -46,12 +52,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [profs, projs] = await Promise.all([
+      const [profs, projs, invites] = await Promise.all([
         fetchAllProfiles(),
-        fetchProjects()
+        fetchProjects(),
+        fetchPendingInvitations()
       ]);
       setProfiles(profs);
       setProjects(projs);
+      setInvitations(invites);
     } catch (err: any) {
       setError("Failed to load admin data");
     } finally {
@@ -138,16 +146,36 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     }
   };
 
-  const handleSendInvite = (e: React.FormEvent) => {
+  const handleSendInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteEmail) return;
     
-    // Create mailto link
-    const subject = "Invitation to Movie Accountant App";
-    const body = `Hello,\n\nYou have been invited to join the Movie Accountant application.\n\nPlease sign up here: ${window.location.origin}\n\nBest regards,`;
+    setIsInviting(true);
+    setError(null);
+    setSuccessMsg(null);
     
-    window.location.href = `mailto:${inviteEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    setInviteEmail('');
+    try {
+      await sendSystemInvitation(inviteEmail);
+      setSuccessMsg(`Invitation sent to ${inviteEmail}`);
+      setInviteEmail('');
+      // Refresh pending list
+      const updatedInvites = await fetchPendingInvitations();
+      setInvitations(updatedInvites);
+    } catch (err: any) {
+      setError(err.message || "Failed to send invitation");
+    } finally {
+      setIsInviting(false);
+    }
+  };
+
+  const handleRevokeInvitation = async (id: number) => {
+    if (!window.confirm("Revoke this invitation?")) return;
+    try {
+      await deleteInvitation(id);
+      setInvitations(invitations.filter(i => i.id !== id));
+    } catch(err) {
+      setError("Failed to revoke invitation");
+    }
   };
 
   if (loading) return <div className="text-center py-10">Loading Admin Dashboard...</div>;
@@ -158,23 +186,47 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
       {/* 0. Invite User Section */}
       <div className="bg-gradient-to-r from-indigo-600 to-indigo-800 rounded-xl shadow-md p-6 text-white">
         <h3 className="text-lg font-bold mb-2">Invite New User</h3>
-        <p className="text-indigo-100 text-sm mb-4">Send an email invitation to add a new Superuser or team member.</p>
-        <form onSubmit={handleSendInvite} className="flex gap-2 max-w-lg">
+        <p className="text-indigo-100 text-sm mb-4">Send a system invitation (Magic Link) to add a new member.</p>
+        <form onSubmit={handleSendInvite} className="flex flex-col sm:flex-row gap-2 max-w-lg">
           <input
             type="email"
             value={inviteEmail}
             onChange={(e) => setInviteEmail(e.target.value)}
             placeholder="colleague@example.com"
             className="flex-1 px-4 py-2 rounded-lg text-slate-900 text-sm outline-none focus:ring-2 focus:ring-indigo-300"
+            disabled={isInviting}
           />
           <button 
             type="submit"
-            className="bg-white text-indigo-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-50 transition-colors"
+            disabled={isInviting}
+            className="bg-white text-indigo-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-50 transition-colors disabled:opacity-75"
           >
-            Send Invite
+            {isInviting ? 'Sending...' : 'Send Invite'}
           </button>
         </form>
+        {successMsg && <p className="text-emerald-300 text-sm mt-2">✓ {successMsg}</p>}
+        {error && <p className="text-red-300 text-sm mt-2">⚠ {error}</p>}
       </div>
+
+      {/* 0.5 Pending Invitations */}
+      {invitations.length > 0 && (
+         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+            <h3 className="text-md font-bold text-slate-700 mb-4">Pending Invitations</h3>
+            <div className="flex flex-wrap gap-2">
+              {invitations.map(inv => (
+                <div key={inv.id} className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                   <span className="text-sm text-slate-600 mr-2">{inv.email}</span>
+                   <button 
+                    onClick={() => handleRevokeInvitation(inv.id)}
+                    className="text-xs text-red-400 hover:text-red-600 font-medium"
+                   >
+                     Revoke
+                   </button>
+                </div>
+              ))}
+            </div>
+         </div>
+      )}
       
       {/* 1. Project Management Section */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

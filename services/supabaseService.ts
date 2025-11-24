@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole } from '../types';
+import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation } from '../types';
 
 // These should be set in your environment variables
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -223,5 +223,58 @@ export const removeAssignment = async (assignmentId: number) => {
     .delete()
     .eq('id', assignmentId);
     
+  if (error) throw error;
+};
+
+// --- INVITATIONS ---
+
+export const sendSystemInvitation = async (email: string) => {
+  if (!supabase) throw new Error("Supabase not configured");
+
+  // 1. Send Magic Link (OTP) via Supabase
+  const { error: authError } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser: true,
+      // In production, set this to your app URL
+      // emailRedirectTo: window.location.origin 
+    }
+  });
+
+  if (authError) throw authError;
+
+  // 2. Log the invitation in our table
+  const user = await getCurrentUser();
+  if (user) {
+    const { error: dbError } = await supabase
+      .from('user_invitations')
+      .insert([{ 
+        email, 
+        invited_by: user.id,
+        status: 'pending'
+      }]);
+      
+    if (dbError) console.warn("Invited sent but failed to log to DB:", dbError.message);
+  }
+};
+
+export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('user_invitations')
+    .select('*')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+    
+  if (error) throw error;
+  return data as UserInvitation[];
+};
+
+export const deleteInvitation = async (id: number) => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('user_invitations')
+    .delete()
+    .eq('id', id);
   if (error) throw error;
 };
