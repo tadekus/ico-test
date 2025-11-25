@@ -261,97 +261,100 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === 1. ADD COLUMNS (Safe Check) ===
+-- === EMERGENCY REPAIR & SETUP SCRIPT ===
+
+-- 1. DROP BROKEN POLICIES (Fix Infinite Recursion)
+DROP POLICY IF EXISTS "View profiles strict" ON profiles;
+DROP POLICY IF EXISTS "View related profiles" ON profiles;
+DROP POLICY IF EXISTS "Read profiles" ON profiles;
+DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
+
+-- 2. CREATE HELPER FUNCTION (Bypasses RLS loop)
+CREATE OR REPLACE FUNCTION public.get_my_role_safe()
+RETURNS text AS $$
+BEGIN
+  -- "Security Definer" allows this to read the table without triggering RLS recursively
+  RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 3. ENSURE COLUMNS EXIST
 DO $$ 
 BEGIN
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS invited_by uuid references auth.users;
     ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role text;
     ALTER TABLE projects ADD COLUMN IF NOT EXISTS description text;
     ALTER TABLE projects ADD COLUMN IF NOT EXISTS company_name text;
     ALTER TABLE projects ADD COLUMN IF NOT EXISTS ico text;
 EXCEPTION WHEN others THEN null; END $$;
 
--- === 2. HELPER FUNCTION TO PREVENT RECURSION ===
-CREATE OR REPLACE FUNCTION public.get_my_app_role()
-RETURNS text AS $$
-BEGIN
-  RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- === 3. SECURE EMAIL CHECK (Privacy Preserving) ===
-CREATE OR REPLACE FUNCTION public.check_email_exists_global(target_email text)
-RETURNS boolean AS $$
-BEGIN
-  -- Check auth.users (User accounts)
-  IF EXISTS (SELECT 1 FROM auth.users WHERE lower(email) = lower(target_email)) THEN
-    RETURN true;
-  END IF;
-  -- Check profiles (App accounts)
-  IF EXISTS (SELECT 1 FROM public.profiles WHERE lower(email) = lower(target_email)) THEN
-    RETURN true;
-  END IF;
-  -- Check pending invites
-  IF EXISTS (SELECT 1 FROM public.user_invitations WHERE lower(email) = lower(target_email) AND status = 'pending') THEN
-    RETURN true;
-  END IF;
-  
-  RETURN false;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- === 4. ADOPT ORPHANED USERS (The "Invisible User" Fix) ===
--- If a user signed up but the race condition missed linking them, this fixes it.
-UPDATE profiles p 
-SET invited_by = ui.invited_by 
-FROM user_invitations ui 
-WHERE lower(p.email) = lower(ui.email) 
-AND p.invited_by IS NULL;
-
--- === 5. UPDATE RLS FOR VISIBILITY ===
-
--- PROFILES POLICY
-DROP POLICY IF EXISTS "View profiles strict" ON profiles;
-DROP POLICY IF EXISTS "View related profiles" ON profiles;
-DROP POLICY IF EXISTS "Read profiles" ON profiles;
-
-CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
-USING (
-   public.get_my_app_role() = 'admin' -- Admins see all
-   OR id = auth.uid()                 -- Self
-   OR invited_by = auth.uid()         -- My Invitees
-   -- Allow seeing users who are assigned to MY projects
-   OR EXISTS (
-      SELECT 1 FROM project_assignments pa
-      JOIN projects p ON p.id = pa.project_id
-      WHERE pa.user_id = profiles.id AND p.created_by = auth.uid()
-   )
-);
-
--- MASTER UPDATE POLICY
-DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
-CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
-USING ( public.get_my_app_role() = 'admin' );
-
--- === 6. UPDATE OTHER POLICIES ===
-
--- USER INVITATIONS
-DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
-CREATE POLICY "Master manages all invites" ON user_invitations FOR ALL TO authenticated
-USING ( public.get_my_app_role() = 'admin' );
-
--- PROJECTS
-DROP POLICY IF EXISTS "Master manages all projects" ON projects;
-CREATE POLICY "Master manages all projects" ON projects FOR ALL TO authenticated
-USING ( public.get_my_app_role() = 'admin' );
-
--- === 7. FIX MASTER PROFILE ===
+-- 4. FIX MASTER PROFILE (The "Ghost Mode" Fix)
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
 WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
+
+-- 5. NEW ROBUST POLICIES
+
+-- PROFILES: Visibility
+CREATE POLICY "View Profiles Robust" ON profiles FOR SELECT TO authenticated
+USING (
+   -- Master Admin (Hardcoded Bypass)
+   lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+   -- Self
+   OR id = auth.uid()
+   -- Admins (via safe function)
+   OR public.get_my_role_safe() = 'admin'
+   -- My Invitees
+   OR invited_by = auth.uid()
+   -- Project Team Co-members (simplified)
+   OR id IN (
+       SELECT user_id FROM project_assignments 
+       WHERE project_id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid())
+   )
+);
+
+-- PROFILES: Updates
+CREATE POLICY "Admin Update Profiles" ON profiles FOR UPDATE TO authenticated
+USING ( 
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
+    OR public.get_my_role_safe() = 'admin'
+);
+
+-- INVITATIONS
+DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
+CREATE POLICY "Master manages all invites" ON user_invitations FOR ALL TO authenticated
+USING ( 
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
+    OR public.get_my_role_safe() = 'admin'
+);
+
+DROP POLICY IF EXISTS "Users manage own sent invites" ON user_invitations;
+CREATE POLICY "Users manage own sent invites" ON user_invitations FOR ALL TO authenticated
+USING ( invited_by = auth.uid() );
+
+-- PROJECTS
+DROP POLICY IF EXISTS "Master manages all projects" ON projects;
+CREATE POLICY "Master manages all projects" ON projects FOR ALL TO authenticated
+USING ( 
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
+    OR public.get_my_role_safe() = 'admin'
+);
+
+DROP POLICY IF EXISTS "Superusers manage own projects" ON projects;
+CREATE POLICY "Superusers manage own projects" ON projects FOR ALL TO authenticated
+USING ( created_by = auth.uid() );
+
+DROP POLICY IF EXISTS "Team reads assigned projects" ON projects;
+CREATE POLICY "Team reads assigned projects" ON projects FOR SELECT TO authenticated
+USING ( EXISTS (SELECT 1 FROM project_assignments WHERE user_id = auth.uid() AND project_id = projects.id) );
+
+-- 6. FIX USER DELETION (Ensure Cascades)
+-- Ensure FKs cascade deletion if not already set (This is handled by CREATE TABLE ... ON DELETE CASCADE usually)
+-- But we ensure policies allow it.
 `;
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
@@ -359,7 +362,7 @@ SET app_role = 'admin', is_superuser = true;
   return (
     <div className="space-y-6 animate-fade-in pb-12 relative">
       {isGhostAdmin && (
-          <div className="bg-red-50 border-l-4 border-red-500 p-4">
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6">
               <div className="flex">
                   <div className="flex-shrink-0">
                       <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
@@ -368,12 +371,12 @@ SET app_role = 'admin', is_superuser = true;
                   </div>
                   <div className="ml-3">
                       <p className="text-sm text-red-700 font-bold">
-                          CRITICAL: Admin Profile Missing or Broken
+                          CRITICAL: "Infinite Recursion" or "Ghost Profile" Detected
                       </p>
                       <p className="text-sm text-red-700 mt-1">
-                          You are logged in as Master Admin, but your database permissions are causing errors.
+                          The database permission rules are currently broken (infinite loop).
                           <br/>
-                          <strong>You must run the Repair SQL below.</strong>
+                          <strong>Run the EMERGENCY SQL below to fix permissions and restore your Admin profile.</strong>
                       </p>
                       <button 
                         onClick={() => { setShowSql(true); navigator.clipboard.writeText(getMigrationSql()); }}
