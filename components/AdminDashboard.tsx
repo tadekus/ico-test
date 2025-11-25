@@ -261,30 +261,34 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === EMERGENCY REPAIR V3.2: CASCADE FIX ===
--- This script completely resets security to fix "Infinite Recursion".
-
--- 1. DISABLE SECURITY TEMPORARILY (Stop the looping)
+-- === SCORCHED EARTH REPAIR V4.0 ===
+-- 1. DISABLE SECURITY on ALL tables to stop the loop immediately
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
+ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
+ALTER TABLE budgets DISABLE ROW LEVEL SECURITY;
 
--- 2. DROP ALL POLICIES (Clean Slate)
+-- 2. DROP ALL POLICIES on ALL tables (Remove hidden dependencies)
 DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
-DROP POLICY IF EXISTS "Profiles Update" ON profiles;
-DROP POLICY IF EXISTS "View Profiles Robust" ON profiles;
-DROP POLICY IF EXISTS "View profiles strict" ON profiles;
+DROP POLICY IF EXISTS "Profiles Admin Full" ON profiles;
 DROP POLICY IF EXISTS "View related profiles" ON profiles;
 DROP POLICY IF EXISTS "Read profiles" ON profiles;
 DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
-DROP POLICY IF EXISTS "Admin Update Profiles" ON profiles;
-DROP POLICY IF EXISTS "Invitations Admin" ON user_invitations;
-DROP POLICY IF EXISTS "Invitations Self" ON user_invitations;
-DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
-DROP POLICY IF EXISTS "Users manage own sent invites" ON user_invitations;
-DROP POLICY IF EXISTS "Profiles Admin Full" ON profiles;
-DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
 
--- 3. FIX DATA (Ensure Master Admin exists)
+DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
+DROP POLICY IF EXISTS "Invitations Admin" ON user_invitations;
+DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
+
+DROP POLICY IF EXISTS "Superusers manage assignments" ON project_assignments;
+DROP POLICY IF EXISTS "Read own assignments" ON project_assignments;
+DROP POLICY IF EXISTS "Assignments Visibility" ON project_assignments;
+
+DROP POLICY IF EXISTS "Master manages all projects" ON projects;
+DROP POLICY IF EXISTS "Superusers manage own projects" ON projects;
+DROP POLICY IF EXISTS "Team reads assigned projects" ON projects;
+
+-- 3. FIX MASTER USER DATA
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
@@ -292,60 +296,87 @@ WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
 
--- 4. CREATE SAFE ROLE CHECK FUNCTION
--- Added CASCADE to handle dependencies from previous runs
+-- 4. FIX DELETION ISSUES (Cascade Foreign Keys)
+-- If constraints exist, this might fail, so we wrap in DO block or just try add if missing.
+-- Simplified: We assume standard creation. Run this to ensure ON DELETE CASCADE.
+ALTER TABLE project_assignments 
+  DROP CONSTRAINT IF EXISTS project_assignments_user_id_fkey,
+  ADD CONSTRAINT project_assignments_user_id_fkey 
+  FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
+
+ALTER TABLE project_assignments 
+  DROP CONSTRAINT IF EXISTS project_assignments_project_id_fkey,
+  ADD CONSTRAINT project_assignments_project_id_fkey 
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
+
+-- 5. CREATE SAFE ROLE FUNCTION (With CASCADE to remove old deps)
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
 BEGIN
-  -- SET search_path IS CRITICAL for security definers
+  -- Security Definer: Runs as owner (postgres), ignoring caller's RLS
   RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
--- 5. RE-ENABLE SECURITY
+-- 6. RE-ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE budgets ENABLE ROW LEVEL SECURITY;
 
--- 6. APPLY NEW POLICIES
+-- 7. CREATE NEW CLEAN POLICIES
 
--- PROFILES: General Visibility
+-- === PROFILES ===
 CREATE POLICY "Profiles Visibility" ON profiles FOR SELECT TO authenticated
 USING (
-    -- 1. Master Admin (JWT bypass - fastest, no DB lookup)
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    -- 2. Self
-    OR id = auth.uid()
-    -- 3. Admins/Superusers (Safe Function)
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
-    -- 4. My Invitees
-    OR invited_by = auth.uid()
-    -- 5. Team Members (Shared Projects)
-    OR id IN (
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Master (JWT only, NO DB CHECK)
+    OR id = auth.uid()                                  -- Self
+    OR public.get_my_role_safe() IN ('admin', 'superuser') -- Admins/Super (Safe Func)
+    OR invited_by = auth.uid()                          -- My Invitees
+    OR id IN (                                          -- Team Mates (Project based)
        SELECT user_id FROM project_assignments 
        WHERE project_id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid())
     )
 );
 
--- PROFILES: Admin Full Access
-CREATE POLICY "Profiles Admin Full" ON profiles FOR ALL TO authenticated
+CREATE POLICY "Profiles Admin Update" ON profiles FOR ALL TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
     OR public.get_my_role_safe() = 'admin'
 );
 
--- INVITATIONS: Visibility & Management
+-- === INVITATIONS ===
 CREATE POLICY "Invitations Visibility" ON user_invitations FOR ALL TO authenticated
 USING (
-    -- Master Admin
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    -- Admins/Superusers
     OR public.get_my_role_safe() IN ('admin', 'superuser')
-    -- Self (Own invites sent)
     OR invited_by = auth.uid()
-    -- Self (Own invites received - for setup)
     OR lower(email) = lower(auth.jwt() ->> 'email')
 );
+
+-- === PROJECTS ===
+CREATE POLICY "Projects Admin" ON projects FOR ALL TO authenticated
+USING (
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+);
+
+CREATE POLICY "Projects Team Read" ON projects FOR SELECT TO authenticated
+USING (
+    EXISTS (SELECT 1 FROM project_assignments WHERE user_id = auth.uid() AND project_id = projects.id)
+);
+
+-- === ASSIGNMENTS ===
+CREATE POLICY "Assignments Admin" ON project_assignments FOR ALL TO authenticated
+USING (
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+);
+
+CREATE POLICY "Assignments Read Own" ON project_assignments FOR SELECT TO authenticated
+USING ( user_id = auth.uid() );
 `;
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
