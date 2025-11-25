@@ -261,7 +261,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === 1. ADD COLUMNS (If Missing) ===
+-- === 1. ADD COLUMNS (Safe Check) ===
 DO $$ 
 BEGIN
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
@@ -279,7 +279,36 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- === 3. UPDATE RLS FOR VISIBILITY ===
+-- === 3. SECURE EMAIL CHECK (Privacy Preserving) ===
+CREATE OR REPLACE FUNCTION public.check_email_exists_global(target_email text)
+RETURNS boolean AS $$
+BEGIN
+  -- Check auth.users (User accounts)
+  IF EXISTS (SELECT 1 FROM auth.users WHERE lower(email) = lower(target_email)) THEN
+    RETURN true;
+  END IF;
+  -- Check profiles (App accounts)
+  IF EXISTS (SELECT 1 FROM public.profiles WHERE lower(email) = lower(target_email)) THEN
+    RETURN true;
+  END IF;
+  -- Check pending invites
+  IF EXISTS (SELECT 1 FROM public.user_invitations WHERE lower(email) = lower(target_email) AND status = 'pending') THEN
+    RETURN true;
+  END IF;
+  
+  RETURN false;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- === 4. ADOPT ORPHANED USERS (The "Invisible User" Fix) ===
+-- If a user signed up but the race condition missed linking them, this fixes it.
+UPDATE profiles p 
+SET invited_by = ui.invited_by 
+FROM user_invitations ui 
+WHERE lower(p.email) = lower(ui.email) 
+AND p.invited_by IS NULL;
+
+-- === 5. UPDATE RLS FOR VISIBILITY ===
 
 -- PROFILES POLICY
 DROP POLICY IF EXISTS "View profiles strict" ON profiles;
@@ -291,6 +320,12 @@ USING (
    public.get_my_app_role() = 'admin' -- Admins see all
    OR id = auth.uid()                 -- Self
    OR invited_by = auth.uid()         -- My Invitees
+   -- Allow seeing users who are assigned to MY projects
+   OR EXISTS (
+      SELECT 1 FROM project_assignments pa
+      JOIN projects p ON p.id = pa.project_id
+      WHERE pa.user_id = profiles.id AND p.created_by = auth.uid()
+   )
 );
 
 -- MASTER UPDATE POLICY
@@ -298,7 +333,7 @@ DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
 CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
 USING ( public.get_my_app_role() = 'admin' );
 
--- === 4. UPDATE OTHER POLICIES ===
+-- === 6. UPDATE OTHER POLICIES ===
 
 -- USER INVITATIONS
 DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
@@ -310,7 +345,7 @@ DROP POLICY IF EXISTS "Master manages all projects" ON projects;
 CREATE POLICY "Master manages all projects" ON projects FOR ALL TO authenticated
 USING ( public.get_my_app_role() = 'admin' );
 
--- === 5. FIX MASTER PROFILE ===
+-- === 7. FIX MASTER PROFILE ===
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users

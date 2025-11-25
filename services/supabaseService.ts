@@ -294,9 +294,23 @@ export const toggleUserDisabled = async (targetUserId: string, isDisabled: boole
 
 // --- INVITATIONS ---
 
-export const checkUserExists = async (email: string): Promise<boolean> => {
+export const checkUserExistsGlobally = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
-  
+  try {
+    const { data, error } = await supabase.rpc('check_email_exists_global', { target_email: email });
+    if (error) {
+      console.warn("Global email check failed, falling back to basic check:", error);
+      return checkUserExistsBasic(email);
+    }
+    return !!data;
+  } catch (e) {
+    return checkUserExistsBasic(email);
+  }
+};
+
+// Internal fallback
+const checkUserExistsBasic = async (email: string): Promise<boolean> => {
+  if (!supabase) return false;
   const targetEmail = email.toLowerCase();
   
   const { data: profile } = await supabase
@@ -304,7 +318,6 @@ export const checkUserExists = async (email: string): Promise<boolean> => {
     .select('id')
     .ilike('email', targetEmail)
     .maybeSingle();
-    
   if (profile) return true;
 
   const { data: invite } = await supabase
@@ -327,7 +340,8 @@ export const sendSystemInvitation = async (
 
   const targetEmail = email.trim().toLowerCase();
 
-  if (await checkUserExists(targetEmail)) {
+  // Use the robust global check
+  if (await checkUserExistsGlobally(targetEmail)) {
     throw new Error("User already exists or has a pending invitation.");
   }
 
