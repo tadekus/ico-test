@@ -261,7 +261,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === SCORCHED EARTH REPAIR V4.0 ===
+-- === SCORCHED EARTH REPAIR V5.0 (Fix Deletion) ===
 -- 1. DISABLE SECURITY on ALL tables to stop the loop immediately
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
@@ -297,17 +297,44 @@ ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
 
 -- 4. FIX DELETION ISSUES (Cascade Foreign Keys)
--- If constraints exist, this might fail, so we wrap in DO block or just try add if missing.
--- Simplified: We assume standard creation. Run this to ensure ON DELETE CASCADE.
-ALTER TABLE project_assignments 
+-- Ensure that deleting a user from Auth automatically cleans up or updates related data
+
+-- Profiles linked to Auth (Strict)
+ALTER TABLE profiles
+  DROP CONSTRAINT IF EXISTS profiles_id_fkey,
+  ADD CONSTRAINT profiles_id_fkey
+  FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+-- Invoices linked to Auth (Cascade)
+ALTER TABLE invoices
+  DROP CONSTRAINT IF EXISTS invoices_user_id_fkey,
+  ADD CONSTRAINT invoices_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+-- Projects linked to Auth (Set Null - Keep projects if creator deleted)
+ALTER TABLE projects
+  DROP CONSTRAINT IF EXISTS projects_created_by_fkey,
+  ADD CONSTRAINT projects_created_by_fkey
+  FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+-- Invitations sent by User (Cascade)
+ALTER TABLE user_invitations
+  DROP CONSTRAINT IF EXISTS user_invitations_invited_by_fkey,
+  ADD CONSTRAINT user_invitations_invited_by_fkey
+  FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+-- Profiles invited by User (Set Null - Don't delete the invited person)
+ALTER TABLE profiles
+  DROP CONSTRAINT IF EXISTS profiles_invited_by_fkey,
+  ADD CONSTRAINT profiles_invited_by_fkey
+  FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+-- Assignments linked to Profile (Cascade)
+ALTER TABLE project_assignments
   DROP CONSTRAINT IF EXISTS project_assignments_user_id_fkey,
-  ADD CONSTRAINT project_assignments_user_id_fkey 
+  ADD CONSTRAINT project_assignments_user_id_fkey
   FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
 
-ALTER TABLE project_assignments 
-  DROP CONSTRAINT IF EXISTS project_assignments_project_id_fkey,
-  ADD CONSTRAINT project_assignments_project_id_fkey 
-  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE;
 
 -- 5. CREATE SAFE ROLE FUNCTION (With CASCADE to remove old deps)
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
