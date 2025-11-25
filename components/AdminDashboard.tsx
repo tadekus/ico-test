@@ -178,7 +178,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === CRITICAL REPAIR: FIX MASTER PROFILE ===
+-- === 1. ADD ROLE COLUMNS FIRST ===
+DO $$ 
+BEGIN
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
+    ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role text;
+EXCEPTION WHEN others THEN null; END $$;
+
+-- === 2. FIX MASTER PROFILE ===
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
@@ -186,18 +193,11 @@ WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
 
--- === 1. ADD ROLE COLUMNS ===
-DO $$ 
-BEGIN
-    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
-    ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role text;
-EXCEPTION WHEN others THEN null; END $$;
-
--- === 2. MIGRATE ROLES ===
+-- === 3. MIGRATE ROLES ===
 UPDATE profiles SET app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com';
 UPDATE profiles SET app_role = 'superuser' WHERE is_superuser = true AND lower(email) != 'tadekus@gmail.com';
 
--- === 3. UPDATE PERMISSION FUNCTION ===
+-- === 4. UPDATE PERMISSION FUNCTION ===
 CREATE OR REPLACE FUNCTION claim_invited_role()
 RETURNS text AS $$
 DECLARE
@@ -236,7 +236,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- === 4. UPDATE RLS FOR VISIBILITY ===
+-- === 5. UPDATE RLS FOR VISIBILITY ===
 DROP POLICY IF EXISTS "View profiles strict" ON profiles;
 CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
 USING (
