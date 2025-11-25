@@ -66,8 +66,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   const [assignUserId, setAssignUserId] = useState<string>('');
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
 
-  const isAdmin = profile.app_role === 'admin';
-  const isSuperuser = profile.app_role === 'superuser';
+  // Hybrid check: New role OR old flag OR Master email
+  const isMasterUser = profile.email.toLowerCase() === 'tadekus@gmail.com';
+  const isAdmin = profile.app_role === 'admin' || isMasterUser;
+  // Superuser: Explicit role OR legacy flag (if not admin)
+  const isSuperuser = (profile.app_role === 'superuser' || profile.is_superuser === true) && !isAdmin;
   const isGhostAdmin = profile.full_name?.includes('(Ghost)');
 
   useEffect(() => {
@@ -367,9 +370,10 @@ DROP POLICY IF EXISTS "Read profiles" ON profiles;
 
 CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
 USING (
-   public.get_my_app_role() = 'admin' -- Admins see all
-   OR id = auth.uid()                 -- Self
-   OR invited_by = auth.uid()         -- My Invitees (Direct link)
+   lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Hardcoded Master Check (Fixes bootstrapping issues)
+   OR public.get_my_app_role() = 'admin'             -- Admins see all
+   OR id = auth.uid()                                -- Self
+   OR invited_by = auth.uid()                        -- My Invitees (Direct link)
    -- BACKUP: Check invitation history if direct link is missing
    OR EXISTS (
       SELECT 1 FROM user_invitations ui 
@@ -387,27 +391,31 @@ USING (
 -- MASTER UPDATE POLICY
 DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
 CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
-USING ( public.get_my_app_role() = 'admin' );
+USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_app_role() = 'admin' );
 
 -- === 8. UPDATE OTHER POLICIES ===
 
 -- USER INVITATIONS
 DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
 CREATE POLICY "Master manages all invites" ON user_invitations FOR ALL TO authenticated
-USING ( public.get_my_app_role() = 'admin' );
+USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_app_role() = 'admin' );
 
 -- PROJECTS
 DROP POLICY IF EXISTS "Master manages all projects" ON projects;
 CREATE POLICY "Master manages all projects" ON projects FOR ALL TO authenticated
-USING ( public.get_my_app_role() = 'admin' );
+USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_app_role() = 'admin' );
 
--- === 9. FIX MASTER PROFILE ===
+-- === 9. FIX MASTER & LEGACY PROFILES ===
+-- Fix Master
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
 WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
+
+-- Fix Legacy Superusers
+UPDATE profiles SET app_role = 'superuser' WHERE lower(email) = 'ministerstvo@kouzel.cz';
 `;
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
