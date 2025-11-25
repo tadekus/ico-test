@@ -301,7 +301,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- === 4. ADOPT ORPHANED USERS (The "Invisible User" Fix) ===
--- If a user signed up but the race condition missed linking them, this fixes it.
+-- Fix 1: Link based on invitation history
 UPDATE profiles p 
 SET invited_by = ui.invited_by 
 FROM user_invitations ui 
@@ -358,7 +358,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- === 7. UPDATE RLS FOR VISIBILITY ===
+-- === 7. UPDATE RLS FOR VISIBILITY (The "Backup Link" Fix) ===
 
 -- PROFILES POLICY
 DROP POLICY IF EXISTS "View profiles strict" ON profiles;
@@ -369,7 +369,13 @@ CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
 USING (
    public.get_my_app_role() = 'admin' -- Admins see all
    OR id = auth.uid()                 -- Self
-   OR invited_by = auth.uid()         -- My Invitees
+   OR invited_by = auth.uid()         -- My Invitees (Direct link)
+   -- BACKUP: Check invitation history if direct link is missing
+   OR EXISTS (
+      SELECT 1 FROM user_invitations ui 
+      WHERE lower(ui.email) = lower(profiles.email) 
+      AND ui.invited_by = auth.uid()
+   )
    -- Allow seeing users who are assigned to MY projects
    OR EXISTS (
       SELECT 1 FROM project_assignments pa
@@ -689,6 +695,17 @@ SET app_role = 'admin', is_superuser = true;
                            {isInviting ? 'Sending...' : 'Send Team Invitation'}
                        </button>
                    </form>
+                   <div className="mt-8 pt-6 border-t border-slate-100">
+                      <button onClick={() => setShowSql(!showSql)} className="text-xs text-slate-400 hover:text-indigo-600 underline">
+                          {showSql ? 'Hide SQL' : 'Show Database Migration SQL'}
+                      </button>
+                      {showSql && (
+                          <div className="mt-2 bg-slate-900 text-slate-300 p-3 rounded text-xs font-mono overflow-x-auto">
+                              <pre>{getMigrationSql()}</pre>
+                              <p className="mt-2 text-yellow-500">Run this in Supabase SQL Editor to fix visibility issues.</p>
+                          </div>
+                      )}
+                  </div>
                </div>
 
                <div className="lg:col-span-2 space-y-8">
