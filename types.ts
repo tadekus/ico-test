@@ -61,6 +61,9 @@ export interface Budget {
 export interface Project {
   id: number;
   name: string;
+  description?: string;
+  company_name?: string;
+  ico?: string;
   currency: string;
   created_by?: string;
   created_at: string;

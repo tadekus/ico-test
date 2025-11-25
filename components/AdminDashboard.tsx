@@ -8,7 +8,10 @@ import {
   deleteInvitation,
   createProject,
   fetchProjects,
-  uploadBudget
+  uploadBudget,
+  fetchProjectAssignments,
+  addProjectAssignment,
+  removeProjectAssignment
 } from '../services/supabaseService';
 import { Profile, UserInvitation, Project, ProjectAssignment, ProjectRole, AppRole } from '../types';
 
@@ -44,12 +47,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   // Project Forms
   const [projectName, setProjectName] = useState('');
   const [projectCurrency, setProjectCurrency] = useState('CZK');
+  const [projectDescription, setProjectDescription] = useState('');
+  const [projectCompany, setProjectCompany] = useState('');
+  const [projectIco, setProjectIco] = useState('');
   const [isCreatingProject, setIsCreatingProject] = useState(false);
 
-  // Budget
+  // Budget & Team Management
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [uploadingBudget, setUploadingBudget] = useState(false);
+
+  // Team Assignment Modal
+  const [activeProjectForTeam, setActiveProjectForTeam] = useState<Project | null>(null);
+  const [projectAssignments, setProjectAssignments] = useState<ProjectAssignment[]>([]);
+  const [assignUserRole, setAssignUserRole] = useState<ProjectRole>('lineproducer');
+  const [assignUserId, setAssignUserId] = useState<string>('');
+  const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
 
   const isAdmin = profile.app_role === 'admin';
   const isSuperuser = profile.app_role === 'superuser';
@@ -105,8 +118,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
          await sendSystemInvitation(inviteEmail, inviteAppRole, null, null);
       } else {
          // Superuser inviting Team Member
-         if (!inviteProjectId) throw new Error("Please select a project.");
-         await sendSystemInvitation(inviteEmail, null, inviteProjectRole, parseInt(inviteProjectId));
+         const pId = inviteProjectId ? parseInt(inviteProjectId) : null;
+         await sendSystemInvitation(inviteEmail, null, inviteProjectRole, pId);
       }
 
       setSuccessMsg(`Invitation sent to ${inviteEmail}`);
@@ -126,10 +139,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
       setIsCreatingProject(true);
       setError(null);
       try {
-          await createProject(projectName, projectCurrency);
+          await createProject(projectName, projectCurrency, projectDescription, projectCompany, projectIco);
           const updatedProjs = await fetchProjects(); 
           setProjects(updatedProjs);
           setProjectName('');
+          setProjectDescription('');
+          setProjectCompany('');
+          setProjectIco('');
           setSuccessMsg("Project created successfully");
       } catch (err: any) {
           setError(err.message);
@@ -182,12 +198,61 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
     } catch(err) { setError("Failed to revoke invitation"); }
   };
 
+  // --- TEAM ASSIGNMENT LOGIC ---
+  
+  const openTeamManager = async (project: Project) => {
+      setActiveProjectForTeam(project);
+      setIsLoadingAssignments(true);
+      try {
+          const assignments = await fetchProjectAssignments(project.id);
+          setProjectAssignments(assignments);
+      } catch (err) {
+          console.error(err);
+      } finally {
+          setIsLoadingAssignments(false);
+      }
+  };
+  
+  const closeTeamManager = () => {
+      setActiveProjectForTeam(null);
+      setProjectAssignments([]);
+      setAssignUserId('');
+  };
+  
+  const handleAddAssignment = async () => {
+      if(!activeProjectForTeam || !assignUserId) return;
+      try {
+          await addProjectAssignment(activeProjectForTeam.id, assignUserId, assignUserRole);
+          // Refresh list
+          const assignments = await fetchProjectAssignments(activeProjectForTeam.id);
+          setProjectAssignments(assignments);
+          setAssignUserId('');
+      } catch (err: any) {
+          alert(err.message || "Failed to assign user");
+      }
+  };
+  
+  const handleRemoveAssignment = async (id: number) => {
+       if(!activeProjectForTeam) return;
+       try {
+          await removeProjectAssignment(id);
+          // Refresh list
+          const assignments = await fetchProjectAssignments(activeProjectForTeam.id);
+          setProjectAssignments(assignments);
+      } catch (err: any) {
+          alert(err.message || "Failed to remove user");
+      }
+  };
+
   const getMigrationSql = () => `
 -- === 1. ADD COLUMNS (If Missing) ===
 DO $$ 
 BEGIN
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
     ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role text;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS description text;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS company_name text;
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS ico text;
 EXCEPTION WHEN others THEN null; END $$;
 
 -- === 2. HELPER FUNCTION TO PREVENT RECURSION ===
@@ -241,7 +306,7 @@ SET app_role = 'admin', is_superuser = true;
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
 
   return (
-    <div className="space-y-6 animate-fade-in pb-12">
+    <div className="space-y-6 animate-fade-in pb-12 relative">
       {isGhostAdmin && (
           <div className="bg-red-50 border-l-4 border-red-500 p-4">
               <div className="flex">
@@ -399,24 +464,44 @@ SET app_role = 'admin', is_superuser = true;
       {/* === PROJECTS TAB (SUPERUSER ONLY) === */}
       {isSuperuser && activeTab === 'projects' && (
           <div className="space-y-8">
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col md:flex-row gap-4 items-end">
-                  <div className="flex-1 w-full">
-                      <label className="text-xs font-bold text-slate-500 uppercase">New Project Name</label>
-                      <input type="text" value={projectName} onChange={e => setProjectName(e.target.value)}
-                         className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="e.g. Autumn Commercial" />
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                  <h3 className="font-bold text-slate-800 mb-4">Create New Project</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-end">
+                      <div className="col-span-1">
+                          <label className="text-xs font-bold text-slate-500 uppercase">Project Name</label>
+                          <input type="text" value={projectName} onChange={e => setProjectName(e.target.value)}
+                             className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="e.g. Autumn Commercial" />
+                      </div>
+                      <div className="col-span-1">
+                          <label className="text-xs font-bold text-slate-500 uppercase">Production Company</label>
+                          <input type="text" value={projectCompany} onChange={e => setProjectCompany(e.target.value)}
+                             className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="e.g. Studio X s.r.o." />
+                      </div>
+                      <div className="col-span-1">
+                           <label className="text-xs font-bold text-slate-500 uppercase">IČO (Company ID)</label>
+                           <input type="text" value={projectIco} onChange={e => setProjectIco(e.target.value)}
+                              className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="12345678" />
+                      </div>
+                      <div className="col-span-1 md:col-span-2">
+                          <label className="text-xs font-bold text-slate-500 uppercase">Description</label>
+                          <input type="text" value={projectDescription} onChange={e => setProjectDescription(e.target.value)}
+                             className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="Short description of the project" />
+                      </div>
+                      <div className="col-span-1">
+                          <label className="text-xs font-bold text-slate-500 uppercase">Currency</label>
+                          <select value={projectCurrency} onChange={e => setProjectCurrency(e.target.value)}
+                             className="w-full mt-1 px-3 py-2 border rounded text-sm bg-white">
+                              <option value="CZK">CZK</option>
+                              <option value="EUR">EUR</option>
+                              <option value="USD">USD</option>
+                          </select>
+                      </div>
                   </div>
-                  <div className="w-32">
-                      <label className="text-xs font-bold text-slate-500 uppercase">Currency</label>
-                      <select value={projectCurrency} onChange={e => setProjectCurrency(e.target.value)}
-                         className="w-full mt-1 px-3 py-2 border rounded text-sm bg-white">
-                          <option value="CZK">CZK</option>
-                          <option value="EUR">EUR</option>
-                          <option value="USD">USD</option>
-                      </select>
+                  <div className="mt-4 flex justify-end">
+                      <button onClick={handleCreateProject} disabled={isCreatingProject} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded font-medium text-sm">
+                          {isCreatingProject ? 'Creating...' : 'Create Project'}
+                      </button>
                   </div>
-                  <button onClick={handleCreateProject} disabled={isCreatingProject} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded font-medium text-sm h-[38px]">
-                      Create
-                  </button>
               </div>
 
                {/* Hidden file input */}
@@ -424,18 +509,29 @@ SET app_role = 'admin', is_superuser = true;
 
               <div className="grid grid-cols-1 gap-4">
                   {projects.map(proj => (
-                      <div key={proj.id} className="bg-white border border-slate-200 rounded-xl p-6 flex justify-between items-center shadow-sm">
-                          <div>
-                              <h4 className="font-bold text-slate-800 text-lg">{proj.name}</h4>
-                              <p className="text-xs text-slate-500">{proj.currency} • Created {new Date(proj.created_at).toLocaleDateString()}</p>
-                              <div className="mt-2 text-xs text-slate-400 bg-slate-50 inline-block px-2 py-1 rounded">
-                                  {proj.budgets?.length || 0} budget versions
+                      <div key={proj.id} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+                          <div className="flex justify-between items-start mb-4">
+                              <div>
+                                  <h4 className="font-bold text-slate-800 text-lg">{proj.name}</h4>
+                                  {proj.company_name && <p className="text-sm font-medium text-slate-600">{proj.company_name} {proj.ico && `(IČO: ${proj.ico})`}</p>}
+                                  {proj.description && <p className="text-sm text-slate-500 mt-1">{proj.description}</p>}
+                                  <p className="text-xs text-slate-400 mt-2">{proj.currency} • Created {new Date(proj.created_at).toLocaleDateString()}</p>
+                              </div>
+                              <div className="flex flex-col space-y-2">
+                                <button onClick={() => handleBudgetClick(proj.id)} disabled={uploadingBudget}
+                                    className="text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded transition-colors whitespace-nowrap">
+                                    {uploadingBudget && selectedProjectId === proj.id ? 'Uploading...' : 'Upload Budget XML'}
+                                </button>
+                                <button onClick={() => openTeamManager(proj)}
+                                    className="text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded transition-colors whitespace-nowrap">
+                                    Manage Team
+                                </button>
                               </div>
                           </div>
-                          <button onClick={() => handleBudgetClick(proj.id)} disabled={uploadingBudget}
-                              className="text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-4 py-2 rounded transition-colors">
-                              {uploadingBudget && selectedProjectId === proj.id ? 'Uploading...' : 'Upload Budget XML'}
-                          </button>
+                          <div className="text-xs text-slate-400 border-t border-slate-100 pt-3 flex items-center gap-4">
+                              <span>{proj.budgets?.length || 0} budget versions</span>
+                              {/* Future: Add assignment count */}
+                          </div>
                       </div>
                   ))}
                   {projects.length === 0 && (
@@ -451,7 +547,7 @@ SET app_role = 'admin', is_superuser = true;
       {isSuperuser && activeTab === 'team' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-fit">
-                   <h3 className="font-bold text-slate-800 mb-4">Invite Team Member</h3>
+                   <h3 className="font-bold text-slate-800 mb-4">Invite New Team Member</h3>
                    <form onSubmit={handleSendInvite} className="flex flex-col gap-4">
                        <div>
                            <label className="text-xs font-semibold text-slate-500 uppercase">Email Address</label>
@@ -459,10 +555,10 @@ SET app_role = 'admin', is_superuser = true;
                               className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="colleague@example.com" />
                        </div>
                        <div>
-                           <label className="text-xs font-semibold text-slate-500 uppercase">Project</label>
-                           <select required value={inviteProjectId} onChange={e => setInviteProjectId(e.target.value)}
+                           <label className="text-xs font-semibold text-slate-500 uppercase">Assign to Project (Optional)</label>
+                           <select value={inviteProjectId} onChange={e => setInviteProjectId(e.target.value)}
                               className="w-full mt-1 px-3 py-2 border rounded text-sm bg-slate-50">
-                               <option value="">Select a project...</option>
+                               <option value="">-- No Project Assignment --</option>
                                {projects.map(p => (
                                    <option key={p.id} value={p.id}>{p.name}</option>
                                ))}
@@ -477,7 +573,7 @@ SET app_role = 'admin', is_superuser = true;
                                <option value="accountant">Accountant</option>
                            </select>
                        </div>
-                       <button type="submit" disabled={isInviting || projects.length === 0} className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded font-medium text-sm disabled:opacity-50">
+                       <button type="submit" disabled={isInviting} className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded font-medium text-sm disabled:opacity-50">
                            {isInviting ? 'Sending...' : 'Send Team Invitation'}
                        </button>
                    </form>
@@ -496,7 +592,7 @@ SET app_role = 'admin', is_superuser = true;
                                        <td className="px-6 py-3">
                                            <div className="font-medium text-slate-900">{inv.email}</div>
                                            <div className="text-xs text-slate-500">
-                                               {inv.target_role} • {projects.find(p => p.id === inv.target_project_id)?.name || 'Unknown Project'}
+                                               {inv.target_role || 'No Role'} • {projects.find(p => p.id === inv.target_project_id)?.name || 'Unassigned'}
                                            </div>
                                        </td>
                                        <td className="px-6 py-3 text-right">
@@ -514,7 +610,8 @@ SET app_role = 'admin', is_superuser = true;
                    {/* Active Team Members */}
                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                        <div className="p-4 border-b border-slate-100 bg-slate-50">
-                           <h4 className="font-bold text-slate-700 text-sm">Active Team Members</h4>
+                           <h4 className="font-bold text-slate-700 text-sm">My Active Team Members</h4>
+                           <p className="text-xs text-slate-400 mt-1">Users invited by you (App Role: User)</p>
                        </div>
                        <table className="w-full text-sm text-left">
                            <tbody className="divide-y divide-slate-100">
@@ -548,6 +645,105 @@ SET app_role = 'admin', is_superuser = true;
                </div>
           </div>
       )}
+
+      {/* === MANAGE TEAM MODAL === */}
+      {activeProjectForTeam && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 flex justify-between items-center">
+                      <h3 className="text-lg font-bold text-slate-800">Manage Team: {activeProjectForTeam.name}</h3>
+                      <button onClick={closeTeamManager} className="text-slate-400 hover:text-slate-600">
+                          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                      </button>
+                  </div>
+                  
+                  <div className="p-6 bg-slate-50 border-b border-slate-200">
+                      <label className="text-xs font-bold text-slate-500 uppercase mb-2 block">Add Existing Team Member</label>
+                      <div className="flex gap-2">
+                          <select 
+                            value={assignUserId} 
+                            onChange={e => setAssignUserId(e.target.value)}
+                            className="flex-1 px-3 py-2 border rounded text-sm bg-white"
+                          >
+                              <option value="">Select user...</option>
+                              {profiles
+                                .filter(p => p.app_role === 'user')
+                                .filter(p => !projectAssignments.find(a => a.user_id === p.id)) // Exclude already assigned
+                                .map(p => (
+                                  <option key={p.id} value={p.id}>
+                                      {p.full_name || p.email} ({p.email})
+                                  </option>
+                              ))}
+                          </select>
+                          <select 
+                            value={assignUserRole} 
+                            onChange={e => setAssignUserRole(e.target.value as ProjectRole)}
+                            className="w-40 px-3 py-2 border rounded text-sm bg-white"
+                          >
+                               <option value="lineproducer">Line Producer</option>
+                               <option value="producer">Producer</option>
+                               <option value="accountant">Accountant</option>
+                          </select>
+                          <button 
+                            onClick={handleAddAssignment}
+                            disabled={!assignUserId}
+                            className="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+                          >
+                              Add
+                          </button>
+                      </div>
+                  </div>
+
+                  <div className="p-6">
+                       <h4 className="font-bold text-slate-700 text-sm mb-4">Assigned Members</h4>
+                       {isLoadingAssignments ? (
+                           <div className="text-center py-4"><div className="animate-spin inline-block w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full"></div></div>
+                       ) : (
+                           <div className="space-y-2">
+                               {projectAssignments.map(assign => (
+                                   <div key={assign.id} className="flex justify-between items-center p-3 bg-white border border-slate-100 rounded-lg shadow-sm">
+                                       <div>
+                                           <div className="font-medium text-slate-900">
+                                               {assign.profile?.full_name || 'Unknown User'}
+                                           </div>
+                                           <div className="text-xs text-slate-500">
+                                               {assign.profile?.email}
+                                           </div>
+                                       </div>
+                                       <div className="flex items-center gap-4">
+                                           <span className="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs font-semibold uppercase">
+                                               {assign.role}
+                                           </span>
+                                           <button 
+                                              onClick={() => handleRemoveAssignment(assign.id)}
+                                              className="text-red-400 hover:text-red-600"
+                                              title="Remove"
+                                           >
+                                               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                               </svg>
+                                           </button>
+                                       </div>
+                                   </div>
+                               ))}
+                               {projectAssignments.length === 0 && (
+                                   <div className="text-center py-8 text-slate-400 text-sm italic">No members assigned to this project yet.</div>
+                               )}
+                           </div>
+                       )}
+                  </div>
+                  
+                  <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end">
+                      <button onClick={closeTeamManager} className="text-slate-600 hover:text-slate-900 font-medium text-sm">
+                          Close
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
     </div>
   );
 };

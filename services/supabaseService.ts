@@ -148,7 +148,13 @@ export const deleteInvoice = async (id: number): Promise<void> => {
 
 // --- PROJECTS & BUDGETS ---
 
-export const createProject = async (name: string, currency: string): Promise<Project> => {
+export const createProject = async (
+    name: string, 
+    currency: string, 
+    description?: string, 
+    company_name?: string, 
+    ico?: string
+): Promise<Project> => {
     if (!supabase) throw new Error("Supabase not configured");
     const user = await getCurrentUser();
     if (!user) throw new Error("User not logged in");
@@ -158,6 +164,9 @@ export const createProject = async (name: string, currency: string): Promise<Pro
         .insert([{ 
             name, 
             currency,
+            description,
+            company_name,
+            ico,
             created_by: user.id
         }])
         .select()
@@ -192,6 +201,58 @@ export const uploadBudget = async (projectId: number, fileName: string, xmlConte
             xml_content: xmlContent
         }]);
     
+    if (error) throw error;
+};
+
+// --- PROJECT ASSIGNMENTS ---
+
+export const fetchProjectAssignments = async (projectId: number): Promise<ProjectAssignment[]> => {
+    if (!supabase) return [];
+    
+    const { data, error } = await supabase
+        .from('project_assignments')
+        .select(`
+            *,
+            profile:profiles(id, full_name, email)
+        `)
+        .eq('project_id', projectId);
+        
+    if (error) {
+        console.error("Fetch Assignments Error:", error);
+        return [];
+    }
+    // Flatten the profile data
+    return data.map((item: any) => ({
+        ...item,
+        profile: item.profile
+    })) as ProjectAssignment[];
+};
+
+export const addProjectAssignment = async (projectId: number, userId: string, role: ProjectRole) => {
+    if (!supabase) throw new Error("Supabase not configured");
+    
+    const { error } = await supabase
+        .from('project_assignments')
+        .insert([{
+            project_id: projectId,
+            user_id: userId,
+            role
+        }]);
+        
+    if (error) {
+        if (error.code === '23505') throw new Error("User is already assigned to this project.");
+        throw error;
+    }
+};
+
+export const removeProjectAssignment = async (assignmentId: number) => {
+    if (!supabase) throw new Error("Supabase not configured");
+    
+    const { error } = await supabase
+        .from('project_assignments')
+        .delete()
+        .eq('id', assignmentId);
+        
     if (error) throw error;
 };
 
