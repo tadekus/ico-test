@@ -308,7 +308,57 @@ FROM user_invitations ui
 WHERE lower(p.email) = lower(ui.email) 
 AND p.invited_by IS NULL;
 
--- === 5. UPDATE RLS FOR VISIBILITY ===
+-- === 5. DATA CLEANUP: SYNC IS_SUPERUSER FLAG ===
+-- This ensures 'is_superuser' is only true for Admin/Superuser roles
+UPDATE profiles SET is_superuser = true WHERE app_role IN ('admin', 'superuser');
+UPDATE profiles SET is_superuser = false WHERE app_role = 'user';
+
+-- === 6. UPDATE CLAIM ROLE LOGIC (Fixing the root cause) ===
+CREATE OR REPLACE FUNCTION claim_invited_role()
+RETURNS text AS $$
+DECLARE
+  inv_record record;
+  current_email text;
+BEGIN
+  SET search_path = public, auth;
+  SELECT lower(email) INTO current_email FROM auth.users WHERE id = auth.uid();
+  
+  SELECT * FROM public.user_invitations 
+  WHERE lower(email) = current_email AND status = 'pending'
+  LIMIT 1 INTO inv_record;
+
+  IF inv_record.id IS NOT NULL THEN
+    UPDATE public.profiles SET invited_by = inv_record.invited_by WHERE id = auth.uid();
+    
+    IF inv_record.target_app_role IS NOT NULL THEN
+       -- System Invite (Admin/Superuser)
+       UPDATE public.profiles SET 
+         app_role = inv_record.target_app_role,
+         is_superuser = true 
+       WHERE id = auth.uid();
+    ELSE
+       -- Project Invite (Regular User)
+       UPDATE public.profiles SET 
+         app_role = 'user',
+         is_superuser = false 
+       WHERE id = auth.uid();
+       
+       IF inv_record.target_project_id IS NOT NULL THEN
+          INSERT INTO public.project_assignments (project_id, user_id, role)
+          VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role)
+          ON CONFLICT DO NOTHING;
+       END IF;
+    END IF;
+
+    UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
+    RETURN 'Role Claimed';
+  ELSE
+    RETURN 'No pending invitation found';
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- === 7. UPDATE RLS FOR VISIBILITY ===
 
 -- PROFILES POLICY
 DROP POLICY IF EXISTS "View profiles strict" ON profiles;
@@ -333,7 +383,7 @@ DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
 CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
 USING ( public.get_my_app_role() = 'admin' );
 
--- === 6. UPDATE OTHER POLICIES ===
+-- === 8. UPDATE OTHER POLICIES ===
 
 -- USER INVITATIONS
 DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
@@ -345,7 +395,7 @@ DROP POLICY IF EXISTS "Master manages all projects" ON projects;
 CREATE POLICY "Master manages all projects" ON projects FOR ALL TO authenticated
 USING ( public.get_my_app_role() = 'admin' );
 
--- === 7. FIX MASTER PROFILE ===
+-- === 9. FIX MASTER PROFILE ===
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
