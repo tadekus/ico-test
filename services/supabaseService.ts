@@ -190,6 +190,15 @@ export const fetchProjects = async (): Promise<Project[]> => {
     return data as Project[];
 };
 
+export const deleteProject = async (id: number): Promise<void> => {
+    if (!supabase) throw new Error("Supabase not configured");
+    const { error } = await supabase
+        .from('projects')
+        .delete()
+        .eq('id', id);
+    if (error) throw error;
+};
+
 export const uploadBudget = async (projectId: number, fileName: string, xmlContent: string) => {
     if (!supabase) throw new Error("Supabase not configured");
     

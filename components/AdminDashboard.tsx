@@ -8,6 +8,7 @@ import {
   deleteInvitation,
   createProject,
   fetchProjects,
+  deleteProject,
   uploadBudget,
   fetchProjectAssignments,
   addProjectAssignment,
@@ -51,6 +52,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   const [projectCompany, setProjectCompany] = useState('');
   const [projectIco, setProjectIco] = useState('');
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [deletingProjectId, setDeletingProjectId] = useState<number | null>(null);
 
   // Budget & Team Management
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -152,6 +154,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
       } finally {
           setIsCreatingProject(false);
       }
+  };
+
+  const handleDeleteProject = async (id: number) => {
+    if(!window.confirm("Are you sure you want to delete this project? This will assume all budgets and assignments are deleted.")) return;
+    setDeletingProjectId(id);
+    try {
+        await deleteProject(id);
+        setProjects(prev => prev.filter(p => p.id !== id));
+        setSuccessMsg("Project deleted.");
+    } catch (err: any) {
+        alert("Failed to delete project: " + err.message);
+    } finally {
+        setDeletingProjectId(null);
+    }
   };
 
   const handleBudgetClick = (projectId: number) => {
@@ -526,6 +542,17 @@ SET app_role = 'admin', is_superuser = true;
                                     className="text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 px-4 py-2 rounded transition-colors whitespace-nowrap">
                                     Manage Team
                                 </button>
+                                <button onClick={() => handleDeleteProject(proj.id)} disabled={deletingProjectId === proj.id}
+                                    className="text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 px-4 py-2 rounded transition-colors whitespace-nowrap flex items-center justify-center gap-1">
+                                    {deletingProjectId === proj.id ? 'Deleting...' : (
+                                        <>
+                                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                            </svg>
+                                            Delete
+                                        </>
+                                    )}
+                                </button>
                               </div>
                           </div>
                           <div className="text-xs text-slate-400 border-t border-slate-100 pt-3 flex items-center gap-4">
@@ -611,12 +638,12 @@ SET app_role = 'admin', is_superuser = true;
                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
                        <div className="p-4 border-b border-slate-100 bg-slate-50">
                            <h4 className="font-bold text-slate-700 text-sm">My Active Team Members</h4>
-                           <p className="text-xs text-slate-400 mt-1">Users invited by you (App Role: User)</p>
+                           <p className="text-xs text-slate-400 mt-1">Users invited by you.</p>
                        </div>
                        <table className="w-full text-sm text-left">
                            <tbody className="divide-y divide-slate-100">
                                {profiles
-                                 .filter(p => p.app_role === 'user') // Show only 'user' role (team members)
+                                 .filter(p => p.id !== profile.id) // Show everyone I can see (except myself)
                                  .map(p => (
                                    <tr key={p.id} className="hover:bg-slate-50">
                                        <td className="px-6 py-3">
@@ -636,7 +663,7 @@ SET app_role = 'admin', is_superuser = true;
                                        </td>
                                    </tr>
                                ))}
-                               {profiles.filter(p => p.app_role === 'user').length === 0 && (
+                               {profiles.filter(p => p.id !== profile.id).length === 0 && (
                                    <tr><td colSpan={3} className="px-6 py-4 text-center text-slate-400 text-xs italic">No active team members found.</td></tr>
                                )}
                            </tbody>
@@ -669,7 +696,7 @@ SET app_role = 'admin', is_superuser = true;
                           >
                               <option value="">Select user...</option>
                               {profiles
-                                .filter(p => p.app_role === 'user')
+                                .filter(p => p.id !== profile.id) // Allow assigning anyone visible (except self)
                                 .filter(p => !projectAssignments.find(a => a.user_id === p.id)) // Exclude already assigned
                                 .map(p => (
                                   <option key={p.id} value={p.id}>
