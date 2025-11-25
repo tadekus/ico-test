@@ -30,19 +30,10 @@ function App() {
     supabase: isSupabaseConfigured
   };
 
-  // RBAC LOGIC (Hybrid approach to support migration & master override)
-  const isMasterUser = user?.email?.toLowerCase() === 'tadekus@gmail.com';
-  
-  // Admin: Explicit role OR Master Email
-  const isAdmin = userProfile?.app_role === 'admin' || isMasterUser;
-  
-  // Superuser: Explicit role OR Legacy flag (if not admin)
-  const isSuperuser = (userProfile?.app_role === 'superuser' || (userProfile?.is_superuser === true)) && !isAdmin;
-  
+  // RBAC LOGIC
+  const isAdmin = userProfile?.app_role === 'admin';
+  const isSuperuser = userProfile?.app_role === 'superuser';
   const hasDashboardAccess = isAdmin || isSuperuser;
-
-  // Visual Role Label
-  const roleLabel = isAdmin ? 'Administrator' : isSuperuser ? 'Superuser' : 'User';
 
   useEffect(() => {
     if (configStatus.supabase && supabase) {
@@ -192,15 +183,11 @@ function App() {
             
             {user && (
               <div className="flex items-center justify-center gap-4 bg-white py-2 px-4 rounded-full shadow-sm border border-slate-200">
-                <div className="text-xs text-slate-500 flex flex-col items-end">
+                <div className="text-xs text-slate-500">
                   <span className="block font-medium text-slate-800">{userProfile?.full_name || user.email}</span>
-                  <span className={`text-[10px] uppercase font-bold tracking-wider ${
-                    isAdmin ? 'text-purple-600' : isSuperuser ? 'text-indigo-600' : 'text-slate-500'
-                  }`}>
-                    {roleLabel}
-                  </span>
+                  {isAdmin && <span className="text-purple-600 font-bold">Administrator</span>}
+                  {isSuperuser && <span className="text-indigo-600 font-bold">Superuser</span>}
                 </div>
-                <div className="h-8 w-px bg-slate-200 mx-1"></div>
                 <button 
                   onClick={handleSignOut}
                   className="text-xs font-medium text-red-500 hover:text-red-700 hover:underline"
@@ -295,7 +282,7 @@ function App() {
       </div>
       
       <div className="mt-12 text-center py-4 text-xs text-slate-300">
-        Movie Accountant v2.3 - Role Visibility Fix
+        Movie Accountant v2.2 - RBAC Edition
       </div>
     </div>
   );

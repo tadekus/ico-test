@@ -66,11 +66,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   const [assignUserId, setAssignUserId] = useState<string>('');
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
 
-  // Hybrid check: New role OR old flag OR Master email
-  const isMasterUser = profile.email.toLowerCase() === 'tadekus@gmail.com';
-  const isAdmin = profile.app_role === 'admin' || isMasterUser;
-  // Superuser: Explicit role OR legacy flag (if not admin)
-  const isSuperuser = (profile.app_role === 'superuser' || profile.is_superuser === true) && !isAdmin;
+  const isAdmin = profile.app_role === 'admin';
+  const isSuperuser = profile.app_role === 'superuser';
   const isGhostAdmin = profile.full_name?.includes('(Ghost)');
 
   useEffect(() => {
@@ -304,64 +301,14 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- === 4. ADOPT ORPHANED USERS (The "Invisible User" Fix) ===
--- Fix 1: Link based on invitation history
+-- If a user signed up but the race condition missed linking them, this fixes it.
 UPDATE profiles p 
 SET invited_by = ui.invited_by 
 FROM user_invitations ui 
 WHERE lower(p.email) = lower(ui.email) 
 AND p.invited_by IS NULL;
 
--- === 5. DATA CLEANUP: SYNC IS_SUPERUSER FLAG ===
--- This ensures 'is_superuser' is only true for Admin/Superuser roles
-UPDATE profiles SET is_superuser = true WHERE app_role IN ('admin', 'superuser');
-UPDATE profiles SET is_superuser = false WHERE app_role = 'user';
-
--- === 6. UPDATE CLAIM ROLE LOGIC (Fixing the root cause) ===
-CREATE OR REPLACE FUNCTION claim_invited_role()
-RETURNS text AS $$
-DECLARE
-  inv_record record;
-  current_email text;
-BEGIN
-  SET search_path = public, auth;
-  SELECT lower(email) INTO current_email FROM auth.users WHERE id = auth.uid();
-  
-  SELECT * FROM public.user_invitations 
-  WHERE lower(email) = current_email AND status = 'pending'
-  LIMIT 1 INTO inv_record;
-
-  IF inv_record.id IS NOT NULL THEN
-    UPDATE public.profiles SET invited_by = inv_record.invited_by WHERE id = auth.uid();
-    
-    IF inv_record.target_app_role IS NOT NULL THEN
-       -- System Invite (Admin/Superuser)
-       UPDATE public.profiles SET 
-         app_role = inv_record.target_app_role,
-         is_superuser = true 
-       WHERE id = auth.uid();
-    ELSE
-       -- Project Invite (Regular User)
-       UPDATE public.profiles SET 
-         app_role = 'user',
-         is_superuser = false 
-       WHERE id = auth.uid();
-       
-       IF inv_record.target_project_id IS NOT NULL THEN
-          INSERT INTO public.project_assignments (project_id, user_id, role)
-          VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role)
-          ON CONFLICT DO NOTHING;
-       END IF;
-    END IF;
-
-    UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
-    RETURN 'Role Claimed';
-  ELSE
-    RETURN 'No pending invitation found';
-  END IF;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- === 7. UPDATE RLS FOR VISIBILITY (The "Backup Link" Fix) ===
+-- === 5. UPDATE RLS FOR VISIBILITY ===
 
 -- PROFILES POLICY
 DROP POLICY IF EXISTS "View profiles strict" ON profiles;
@@ -370,16 +317,9 @@ DROP POLICY IF EXISTS "Read profiles" ON profiles;
 
 CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
 USING (
-   lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Hardcoded Master Check (Fixes bootstrapping issues)
-   OR public.get_my_app_role() = 'admin'             -- Admins see all
-   OR id = auth.uid()                                -- Self
-   OR invited_by = auth.uid()                        -- My Invitees (Direct link)
-   -- BACKUP: Check invitation history if direct link is missing
-   OR EXISTS (
-      SELECT 1 FROM user_invitations ui 
-      WHERE lower(ui.email) = lower(profiles.email) 
-      AND ui.invited_by = auth.uid()
-   )
+   public.get_my_app_role() = 'admin' -- Admins see all
+   OR id = auth.uid()                 -- Self
+   OR invited_by = auth.uid()         -- My Invitees
    -- Allow seeing users who are assigned to MY projects
    OR EXISTS (
       SELECT 1 FROM project_assignments pa
@@ -391,31 +331,27 @@ USING (
 -- MASTER UPDATE POLICY
 DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
 CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
-USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_app_role() = 'admin' );
+USING ( public.get_my_app_role() = 'admin' );
 
--- === 8. UPDATE OTHER POLICIES ===
+-- === 6. UPDATE OTHER POLICIES ===
 
 -- USER INVITATIONS
 DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
 CREATE POLICY "Master manages all invites" ON user_invitations FOR ALL TO authenticated
-USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_app_role() = 'admin' );
+USING ( public.get_my_app_role() = 'admin' );
 
 -- PROJECTS
 DROP POLICY IF EXISTS "Master manages all projects" ON projects;
 CREATE POLICY "Master manages all projects" ON projects FOR ALL TO authenticated
-USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_app_role() = 'admin' );
+USING ( public.get_my_app_role() = 'admin' );
 
--- === 9. FIX MASTER & LEGACY PROFILES ===
--- Fix Master
+-- === 7. FIX MASTER PROFILE ===
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
 WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
-
--- Fix Legacy Superusers
-UPDATE profiles SET app_role = 'superuser' WHERE lower(email) = 'ministerstvo@kouzel.cz';
 `;
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
@@ -703,17 +639,6 @@ UPDATE profiles SET app_role = 'superuser' WHERE lower(email) = 'ministerstvo@ko
                            {isInviting ? 'Sending...' : 'Send Team Invitation'}
                        </button>
                    </form>
-                   <div className="mt-8 pt-6 border-t border-slate-100">
-                      <button onClick={() => setShowSql(!showSql)} className="text-xs text-slate-400 hover:text-indigo-600 underline">
-                          {showSql ? 'Hide SQL' : 'Show Database Migration SQL'}
-                      </button>
-                      {showSql && (
-                          <div className="mt-2 bg-slate-900 text-slate-300 p-3 rounded text-xs font-mono overflow-x-auto">
-                              <pre>{getMigrationSql()}</pre>
-                              <p className="mt-2 text-yellow-500">Run this in Supabase SQL Editor to fix visibility issues.</p>
-                          </div>
-                      )}
-                  </div>
                </div>
 
                <div className="lg:col-span-2 space-y-8">
