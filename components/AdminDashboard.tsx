@@ -262,74 +262,94 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === SCORCHED EARTH REPAIR V6.0 (Role & Visibility Fix) ===
+-- === REPAIR V7 (Anti-Recursion & Self Update) ===
 
--- 1. DISABLE SECURITY on ALL tables to stop the loop immediately
+-- 1. DISABLE SECURITY temporarily to prevent crashes during migration
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
 ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
-ALTER TABLE budgets DISABLE ROW LEVEL SECURITY;
 
--- 2. FIX SPECIFIC USER ROLES (Restoring Ministerstvo)
-UPDATE profiles 
-SET app_role = 'superuser', is_superuser = true 
-WHERE lower(email) = 'ministerstvo@kouzel.cz';
+-- 2. CREATE HELPER FUNCTIONS (Security Definer = God Mode)
+-- These allow checking roles and team status without triggering infinite policy loops.
 
--- 3. FIX MASTER USER DATA (Ensuring Tadekus exists)
-INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
-SELECT id, email, 'Master Admin', 'admin', true
-FROM auth.users
-WHERE lower(email) = 'tadekus@gmail.com'
-ON CONFLICT (id) DO UPDATE
-SET app_role = 'admin', is_superuser = true;
-
-
--- 4. CREATE SAFE ROLE FUNCTION (With CASCADE)
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
 BEGIN
-  -- Security Definer: Runs as owner (postgres), ignoring caller's RLS
+  -- Returns role of current user (Admin/Superuser/User)
   RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
+DROP FUNCTION IF EXISTS public.get_my_team_mates_ids() CASCADE;
+CREATE OR REPLACE FUNCTION public.get_my_team_mates_ids()
+RETURNS TABLE (uid uuid) AS $$
+BEGIN
+  -- Returns IDs of users who are in the same projects as me
+  RETURN QUERY 
+  SELECT user_id FROM project_assignments 
+  WHERE project_id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid());
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
--- 5. RE-ENABLE SECURITY
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_invitations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
-ALTER TABLE budgets ENABLE ROW LEVEL SECURITY;
+-- 3. DROP OLD POLICIES (Cleanup)
+DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
+DROP POLICY IF EXISTS "Profiles Admin Update" ON profiles;
+DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
+DROP POLICY IF EXISTS "Projects Admin" ON projects;
+DROP POLICY IF EXISTS "Projects Team Read" ON projects;
+DROP POLICY IF EXISTS "Assignments Admin" ON project_assignments;
+DROP POLICY IF EXISTS "Assignments Read Own" ON project_assignments;
 
 
--- 6. CREATE CLEAN POLICIES
+-- 4. CREATE NEW POLICIES
 
 -- === PROFILES ===
-DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
-CREATE POLICY "Profiles Visibility" ON profiles FOR SELECT TO authenticated
+CREATE POLICY "Profiles Read" ON profiles FOR SELECT TO authenticated
 USING (
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Master sees ALL
-    OR public.get_my_role_safe() = 'admin'              -- Admins see ALL
-    OR id = auth.uid()                                  -- Self
-    OR public.get_my_role_safe() = 'superuser'          -- Superusers see ALL (to pick team)
-    OR invited_by = auth.uid()                          -- My Invitees
-    OR id IN (                                          -- Team Mates (Project based)
-       SELECT user_id FROM project_assignments 
-       WHERE project_id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid())
-    )
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Master
+    OR public.get_my_role_safe() IN ('admin', 'superuser') -- Admins/Supers
+    OR id = auth.uid() -- Self
+    OR invited_by = auth.uid() -- My Invitees
+    OR id IN (SELECT uid FROM public.get_my_team_mates_ids()) -- Team Mates (Safe)
 );
 
-DROP POLICY IF EXISTS "Profiles Admin Update" ON profiles;
-CREATE POLICY "Profiles Admin Update" ON profiles FOR ALL TO authenticated
+CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated
+USING ( id = auth.uid() ) -- Allows user to set their name setup
+WITH CHECK ( id = auth.uid() );
+
+CREATE POLICY "Profiles Admin Update" ON profiles FOR UPDATE TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
     OR public.get_my_role_safe() = 'admin'
 );
+-- Note: Superusers cannot edit other profiles, only disable them (handled by RPC if needed or separate toggle logic)
+
+
+-- === PROJECTS ===
+CREATE POLICY "Projects Admin" ON projects FOR ALL TO authenticated
+USING (
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+);
+
+CREATE POLICY "Projects Team Read" ON projects FOR SELECT TO authenticated
+USING (
+    EXISTS (SELECT 1 FROM project_assignments WHERE user_id = auth.uid() AND project_id = projects.id)
+);
+
+-- === ASSIGNMENTS ===
+CREATE POLICY "Assignments Admin" ON project_assignments FOR ALL TO authenticated
+USING (
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+);
+
+CREATE POLICY "Assignments Read Own" ON project_assignments FOR SELECT TO authenticated
+USING ( user_id = auth.uid() );
 
 -- === INVITATIONS ===
-DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
 CREATE POLICY "Invitations Visibility" ON user_invitations FOR ALL TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
@@ -338,31 +358,11 @@ USING (
     OR lower(email) = lower(auth.jwt() ->> 'email')
 );
 
--- === PROJECTS ===
-DROP POLICY IF EXISTS "Projects Admin" ON projects;
-CREATE POLICY "Projects Admin" ON projects FOR ALL TO authenticated
-USING (
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
-);
-
-DROP POLICY IF EXISTS "Projects Team Read" ON projects;
-CREATE POLICY "Projects Team Read" ON projects FOR SELECT TO authenticated
-USING (
-    EXISTS (SELECT 1 FROM project_assignments WHERE user_id = auth.uid() AND project_id = projects.id)
-);
-
--- === ASSIGNMENTS ===
-DROP POLICY IF EXISTS "Assignments Admin" ON project_assignments;
-CREATE POLICY "Assignments Admin" ON project_assignments FOR ALL TO authenticated
-USING (
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
-);
-
-DROP POLICY IF EXISTS "Assignments Read Own" ON project_assignments;
-CREATE POLICY "Assignments Read Own" ON project_assignments FOR SELECT TO authenticated
-USING ( user_id = auth.uid() );
+-- 5. RE-ENABLE SECURITY
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_invitations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 `;
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
