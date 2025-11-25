@@ -139,7 +139,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const handleBudgetFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !e.target.files.0 || !selectedProjectId) return;
+    if (!e.target.files || !e.target.files[0] || !selectedProjectId) return;
     const file = e.target.files[0];
     setUploadingBudget(true);
     setError(null);
