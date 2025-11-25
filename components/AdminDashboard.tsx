@@ -261,35 +261,29 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === EMERGENCY REPAIR & SETUP SCRIPT ===
+-- === EMERGENCY NUCLEAR REPAIR SCRIPT ===
+-- Run this to fix "Infinite Recursion" and "Missing Admin" errors.
 
--- 1. DROP BROKEN POLICIES (Fix Infinite Recursion)
+-- 1. DISABLE SECURITY (Temporarily stop checks so we can fix data)
+ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
+
+-- 2. DROP ALL EXISTING POLICIES (Clear the slate)
+DROP POLICY IF EXISTS "View Profiles Robust" ON profiles;
 DROP POLICY IF EXISTS "View profiles strict" ON profiles;
 DROP POLICY IF EXISTS "View related profiles" ON profiles;
 DROP POLICY IF EXISTS "Read profiles" ON profiles;
+DROP POLICY IF EXISTS "Admin Update Profiles" ON profiles;
 DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
+DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
+DROP POLICY IF EXISTS "Profiles Update" ON profiles;
 
--- 2. CREATE HELPER FUNCTION (Bypasses RLS loop)
-CREATE OR REPLACE FUNCTION public.get_my_role_safe()
-RETURNS text AS $$
-BEGIN
-  -- "Security Definer" allows this to read the table without triggering RLS recursively
-  RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
+DROP POLICY IF EXISTS "Users manage own sent invites" ON user_invitations;
+DROP POLICY IF EXISTS "Invitations Admin" ON user_invitations;
+DROP POLICY IF EXISTS "Invitations Self" ON user_invitations;
 
--- 3. ENSURE COLUMNS EXIST
-DO $$ 
-BEGIN
-    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
-    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS invited_by uuid references auth.users;
-    ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role text;
-    ALTER TABLE projects ADD COLUMN IF NOT EXISTS description text;
-    ALTER TABLE projects ADD COLUMN IF NOT EXISTS company_name text;
-    ALTER TABLE projects ADD COLUMN IF NOT EXISTS ico text;
-EXCEPTION WHEN others THEN null; END $$;
-
--- 4. FIX MASTER PROFILE (The "Ghost Mode" Fix)
+-- 3. ENSURE ADMIN PROFILE EXISTS (Data Fix)
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
@@ -297,64 +291,56 @@ WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
 
--- 5. NEW ROBUST POLICIES
+-- 4. HELPER FUNCTION (Safe Role Check)
+-- This function allows policies to check role without recursion
+CREATE OR REPLACE FUNCTION public.get_my_role_safe()
+RETURNS text AS $$
+BEGIN
+  -- Security Definer bypasses RLS for this specific query
+  RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- PROFILES: Visibility
-CREATE POLICY "View Profiles Robust" ON profiles FOR SELECT TO authenticated
+-- 5. RE-ENABLE SECURITY
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_invitations ENABLE ROW LEVEL SECURITY;
+
+-- 6. APPLY NEW SIMPLIFIED POLICIES
+
+-- PROFILES: Who can see rows?
+CREATE POLICY "Profiles Visibility" ON profiles FOR SELECT TO authenticated
 USING (
-   -- Master Admin (Hardcoded Bypass)
+   -- 1. Master Admin (JWT Check - No Recursion)
    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-   -- Self
+   -- 2. Self
    OR id = auth.uid()
-   -- Admins (via safe function)
+   -- 3. Admins (Function Check)
    OR public.get_my_role_safe() = 'admin'
-   -- My Invitees
+   -- 4. My Invitees (Direct Check)
    OR invited_by = auth.uid()
-   -- Project Team Co-members (simplified)
+   -- 5. Project Team members (See people in same projects)
    OR id IN (
        SELECT user_id FROM project_assignments 
        WHERE project_id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid())
    )
 );
 
--- PROFILES: Updates
-CREATE POLICY "Admin Update Profiles" ON profiles FOR UPDATE TO authenticated
-USING ( 
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
-    OR public.get_my_role_safe() = 'admin'
+-- PROFILES: Who can update?
+CREATE POLICY "Profiles Update" ON profiles FOR UPDATE TO authenticated
+USING (
+   lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+   OR public.get_my_role_safe() = 'admin'
 );
 
--- INVITATIONS
-DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
-CREATE POLICY "Master manages all invites" ON user_invitations FOR ALL TO authenticated
-USING ( 
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
-    OR public.get_my_role_safe() = 'admin'
+-- INVITATIONS: Who can see/manage?
+CREATE POLICY "Invitations Admin" ON user_invitations FOR ALL TO authenticated
+USING (
+   lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+   OR public.get_my_role_safe() = 'admin'
 );
 
-DROP POLICY IF EXISTS "Users manage own sent invites" ON user_invitations;
-CREATE POLICY "Users manage own sent invites" ON user_invitations FOR ALL TO authenticated
+CREATE POLICY "Invitations Self" ON user_invitations FOR ALL TO authenticated
 USING ( invited_by = auth.uid() );
-
--- PROJECTS
-DROP POLICY IF EXISTS "Master manages all projects" ON projects;
-CREATE POLICY "Master manages all projects" ON projects FOR ALL TO authenticated
-USING ( 
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
-    OR public.get_my_role_safe() = 'admin'
-);
-
-DROP POLICY IF EXISTS "Superusers manage own projects" ON projects;
-CREATE POLICY "Superusers manage own projects" ON projects FOR ALL TO authenticated
-USING ( created_by = auth.uid() );
-
-DROP POLICY IF EXISTS "Team reads assigned projects" ON projects;
-CREATE POLICY "Team reads assigned projects" ON projects FOR SELECT TO authenticated
-USING ( EXISTS (SELECT 1 FROM project_assignments WHERE user_id = auth.uid() AND project_id = projects.id) );
-
--- 6. FIX USER DELETION (Ensure Cascades)
--- Ensure FKs cascade deletion if not already set (This is handled by CREATE TABLE ... ON DELETE CASCADE usually)
--- But we ensure policies allow it.
 `;
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
