@@ -30,10 +30,19 @@ function App() {
     supabase: isSupabaseConfigured
   };
 
-  // RBAC LOGIC
-  const isAdmin = userProfile?.app_role === 'admin';
-  const isSuperuser = userProfile?.app_role === 'superuser';
+  // RBAC LOGIC with Master Override & Legacy Support
+  const isMasterUser = user?.email?.toLowerCase() === 'tadekus@gmail.com';
+  
+  // Admin if role is 'admin' OR it is the master email
+  const isAdmin = (userProfile?.app_role === 'admin') || isMasterUser;
+  
+  // Superuser if role is 'superuser' OR legacy flag is true (and not admin)
+  const isSuperuser = (userProfile?.app_role === 'superuser') || (userProfile?.is_superuser === true && !isAdmin);
+  
   const hasDashboardAccess = isAdmin || isSuperuser;
+  
+  // Display Role Label
+  const displayRole = isAdmin ? 'Administrator' : isSuperuser ? 'Superuser' : 'User';
 
   useEffect(() => {
     if (configStatus.supabase && supabase) {
@@ -69,7 +78,6 @@ function App() {
 
       // --- CRITICAL REPAIR LOGIC ---
       // If profile is missing but this is the Master Email, create a 'Ghost' Admin profile
-      // This allows the user to access the Admin Dashboard to run the SQL repair scripts.
       if (!profile && currentUser.email?.toLowerCase() === 'tadekus@gmail.com') {
           console.warn("Master User detected with missing profile. Activating Ghost Mode.");
           profile = {
@@ -82,9 +90,8 @@ function App() {
           };
       }
       
-      // Fallback: If profile exists but name is empty, force setup
-      if (profile && !profile.full_name && profile.app_role !== 'admin') {
-          // Admins might skip setup via SQL injection, so we allow them
+      // Fallback: If profile exists but name is empty, force setup (unless Admin)
+      if (profile && !profile.full_name && profile.app_role !== 'admin' && !isMasterUser) {
           setHasPendingInvite(true);
           setIsLoadingSession(false);
           return;
@@ -183,14 +190,18 @@ function App() {
             
             {user && (
               <div className="flex items-center justify-center gap-4 bg-white py-2 px-4 rounded-full shadow-sm border border-slate-200">
-                <div className="text-xs text-slate-500">
-                  <span className="block font-medium text-slate-800">{userProfile?.full_name || user.email}</span>
-                  {isAdmin && <span className="text-purple-600 font-bold">Administrator</span>}
-                  {isSuperuser && <span className="text-indigo-600 font-bold">Superuser</span>}
+                <div className="text-right">
+                  <span className="block font-medium text-slate-800 text-sm">{userProfile?.full_name || user.email}</span>
+                  <span className={`text-[10px] uppercase tracking-wider font-bold block ${
+                    isAdmin ? 'text-purple-600' : isSuperuser ? 'text-indigo-600' : 'text-slate-500'
+                  }`}>
+                    [ {displayRole} ]
+                  </span>
                 </div>
+                <div className="h-8 w-px bg-slate-200 mx-1"></div>
                 <button 
                   onClick={handleSignOut}
-                  className="text-xs font-medium text-red-500 hover:text-red-700 hover:underline"
+                  className="text-xs font-medium text-red-500 hover:text-red-700 hover:underline whitespace-nowrap"
                 >
                   Sign Out
                 </button>
@@ -282,7 +293,7 @@ function App() {
       </div>
       
       <div className="mt-12 text-center py-4 text-xs text-slate-300">
-        Movie Accountant v2.2 - RBAC Edition
+        Movie Accountant v2.3 - Role Indicators & Fixed Visibility
       </div>
     </div>
   );

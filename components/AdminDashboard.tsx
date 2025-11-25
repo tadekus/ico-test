@@ -66,8 +66,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   const [assignUserId, setAssignUserId] = useState<string>('');
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
 
-  const isAdmin = profile.app_role === 'admin';
-  const isSuperuser = profile.app_role === 'superuser';
+  const isMasterUser = profile.email?.toLowerCase() === 'tadekus@gmail.com';
+  const isAdmin = profile.app_role === 'admin' || isMasterUser;
+  const isSuperuser = profile.app_role === 'superuser' || (profile.is_superuser === true && !isAdmin);
   const isGhostAdmin = profile.full_name?.includes('(Ghost)');
 
   useEffect(() => {
@@ -261,7 +262,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === SCORCHED EARTH REPAIR V5.1 (Policy Cleanup) ===
+-- === SCORCHED EARTH REPAIR V6.0 (Role & Visibility Fix) ===
+
 -- 1. DISABLE SECURITY on ALL tables to stop the loop immediately
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
@@ -269,35 +271,12 @@ ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
 ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
 ALTER TABLE budgets DISABLE ROW LEVEL SECURITY;
 
--- 2. DROP ALL POLICIES on ALL tables (Remove hidden dependencies & old names)
--- Profiles
-DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
-DROP POLICY IF EXISTS "Profiles Admin Full" ON profiles;
-DROP POLICY IF EXISTS "Profiles Admin Update" ON profiles;
-DROP POLICY IF EXISTS "View related profiles" ON profiles;
-DROP POLICY IF EXISTS "Read profiles" ON profiles;
-DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
+-- 2. FIX SPECIFIC USER ROLES (Restoring Ministerstvo)
+UPDATE profiles 
+SET app_role = 'superuser', is_superuser = true 
+WHERE lower(email) = 'ministerstvo@kouzel.cz';
 
--- Invitations
-DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
-DROP POLICY IF EXISTS "Invitations Admin" ON user_invitations;
-DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
-
--- Assignments
-DROP POLICY IF EXISTS "Assignments Admin" ON project_assignments;
-DROP POLICY IF EXISTS "Assignments Read Own" ON project_assignments;
-DROP POLICY IF EXISTS "Superusers manage assignments" ON project_assignments;
-DROP POLICY IF EXISTS "Read own assignments" ON project_assignments;
-DROP POLICY IF EXISTS "Assignments Visibility" ON project_assignments;
-
--- Projects
-DROP POLICY IF EXISTS "Projects Admin" ON projects;
-DROP POLICY IF EXISTS "Projects Team Read" ON projects;
-DROP POLICY IF EXISTS "Master manages all projects" ON projects;
-DROP POLICY IF EXISTS "Superusers manage own projects" ON projects;
-DROP POLICY IF EXISTS "Team reads assigned projects" ON projects;
-
--- 3. FIX MASTER USER DATA
+-- 3. FIX MASTER USER DATA (Ensuring Tadekus exists)
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
@@ -305,39 +284,8 @@ WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
 
--- 4. FIX DELETION ISSUES (Cascade Foreign Keys)
-ALTER TABLE profiles
-  DROP CONSTRAINT IF EXISTS profiles_id_fkey,
-  ADD CONSTRAINT profiles_id_fkey
-  FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
-ALTER TABLE invoices
-  DROP CONSTRAINT IF EXISTS invoices_user_id_fkey,
-  ADD CONSTRAINT invoices_user_id_fkey
-  FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
-
-ALTER TABLE projects
-  DROP CONSTRAINT IF EXISTS projects_created_by_fkey,
-  ADD CONSTRAINT projects_created_by_fkey
-  FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-
-ALTER TABLE user_invitations
-  DROP CONSTRAINT IF EXISTS user_invitations_invited_by_fkey,
-  ADD CONSTRAINT user_invitations_invited_by_fkey
-  FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE CASCADE;
-
-ALTER TABLE profiles
-  DROP CONSTRAINT IF EXISTS profiles_invited_by_fkey,
-  ADD CONSTRAINT profiles_invited_by_fkey
-  FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-
-ALTER TABLE project_assignments
-  DROP CONSTRAINT IF EXISTS project_assignments_user_id_fkey,
-  ADD CONSTRAINT project_assignments_user_id_fkey
-  FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
-
-
--- 5. CREATE SAFE ROLE FUNCTION (With CASCADE to remove old deps)
+-- 4. CREATE SAFE ROLE FUNCTION (With CASCADE)
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
@@ -347,21 +295,25 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
--- 6. RE-ENABLE SECURITY
+
+-- 5. RE-ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE budgets ENABLE ROW LEVEL SECURITY;
 
--- 7. CREATE NEW CLEAN POLICIES
+
+-- 6. CREATE CLEAN POLICIES
 
 -- === PROFILES ===
+DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
 CREATE POLICY "Profiles Visibility" ON profiles FOR SELECT TO authenticated
 USING (
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Master (JWT only, NO DB CHECK)
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Master sees ALL
+    OR public.get_my_role_safe() = 'admin'              -- Admins see ALL
     OR id = auth.uid()                                  -- Self
-    OR public.get_my_role_safe() IN ('admin', 'superuser') -- Admins/Super (Safe Func)
+    OR public.get_my_role_safe() = 'superuser'          -- Superusers see ALL (to pick team)
     OR invited_by = auth.uid()                          -- My Invitees
     OR id IN (                                          -- Team Mates (Project based)
        SELECT user_id FROM project_assignments 
@@ -369,6 +321,7 @@ USING (
     )
 );
 
+DROP POLICY IF EXISTS "Profiles Admin Update" ON profiles;
 CREATE POLICY "Profiles Admin Update" ON profiles FOR ALL TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
@@ -376,6 +329,7 @@ USING (
 );
 
 -- === INVITATIONS ===
+DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
 CREATE POLICY "Invitations Visibility" ON user_invitations FOR ALL TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
@@ -385,24 +339,28 @@ USING (
 );
 
 -- === PROJECTS ===
+DROP POLICY IF EXISTS "Projects Admin" ON projects;
 CREATE POLICY "Projects Admin" ON projects FOR ALL TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
     OR public.get_my_role_safe() IN ('admin', 'superuser')
 );
 
+DROP POLICY IF EXISTS "Projects Team Read" ON projects;
 CREATE POLICY "Projects Team Read" ON projects FOR SELECT TO authenticated
 USING (
     EXISTS (SELECT 1 FROM project_assignments WHERE user_id = auth.uid() AND project_id = projects.id)
 );
 
 -- === ASSIGNMENTS ===
+DROP POLICY IF EXISTS "Assignments Admin" ON project_assignments;
 CREATE POLICY "Assignments Admin" ON project_assignments FOR ALL TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
     OR public.get_my_role_safe() IN ('admin', 'superuser')
 );
 
+DROP POLICY IF EXISTS "Assignments Read Own" ON project_assignments;
 CREATE POLICY "Assignments Read Own" ON project_assignments FOR SELECT TO authenticated
 USING ( user_id = auth.uid() );
 `;
