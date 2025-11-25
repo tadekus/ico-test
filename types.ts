@@ -37,11 +37,14 @@ export interface FileData {
 
 // --- USER MANAGEMENT ---
 
+export type AppRole = 'admin' | 'superuser' | 'user';
+
 export interface Profile {
   id: string;
   email: string;
   full_name?: string;
-  is_superuser: boolean;
+  app_role: AppRole;
+  is_superuser?: boolean; // Deprecated, kept for backward compat during migration
   is_disabled?: boolean;
   invited_by?: string;
   created_at: string;
@@ -80,7 +83,8 @@ export interface UserInvitation {
   created_at: string;
   status: string; // 'pending' | 'accepted'
   invited_by: string;
-  target_role?: ProjectRole | null;
+  target_app_role?: AppRole | null; // For System Invites (Admin/Superuser)
+  target_role?: ProjectRole | null; // For Project Invites
   target_project_id?: number | null;
 }
 

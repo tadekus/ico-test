@@ -30,8 +30,10 @@ function App() {
     supabase: isSupabaseConfigured
   };
 
-  const isMasterUser = user?.email?.toLowerCase() === 'tadekus@gmail.com';
-  const hasAdminAccess = isMasterUser || (userProfile?.is_superuser ?? false);
+  // RBAC LOGIC
+  const isAdmin = userProfile?.app_role === 'admin';
+  const isSuperuser = userProfile?.app_role === 'superuser';
+  const hasDashboardAccess = isAdmin || isSuperuser;
 
   useEffect(() => {
     if (configStatus.supabase && supabase) {
@@ -54,8 +56,6 @@ function App() {
   const handleUserSession = async (currentUser: User | null) => {
     setUser(currentUser);
     if (currentUser) {
-      // 1. Check if this is an invited user who needs to set a password
-      // We do this BEFORE fetching profile or anything else
       if (currentUser.email) {
         const isPending = await checkMyPendingInvitation(currentUser.email);
         if (isPending) {
@@ -65,10 +65,9 @@ function App() {
         }
       }
 
-      // 2. Normal Flow
       const profile = await getUserProfile(currentUser.id);
       
-      // Fallback: If profile exists but name is empty, force setup (this handles edge cases where invite status might be desynced)
+      // Fallback: If profile exists but name is empty, force setup
       if (profile && !profile.full_name) {
           setHasPendingInvite(true);
           setIsLoadingSession(false);
@@ -78,7 +77,7 @@ function App() {
       // Check if user is disabled
       if (profile?.is_disabled) {
         await signOut();
-        alert("Your account has been disabled by an administrator.");
+        alert("Your account has been suspended by an administrator.");
         setUser(null);
         setUserProfile(null);
         setIsLoadingSession(false);
@@ -97,7 +96,6 @@ function App() {
     if (user?.email) {
       await acceptInvitation(user.email);
       setHasPendingInvite(false);
-      // Force Sign Out so they can log in manually
       await signOut();
       alert("Account setup complete! Please sign in with your new password.");
     }
@@ -132,7 +130,6 @@ function App() {
     setHasPendingInvite(false);
   };
 
-  // Loading state
   if (isLoadingSession) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -141,12 +138,10 @@ function App() {
     );
   }
 
-  // Intercept Pending Invites -> Show Setup Screen
   if (hasPendingInvite && user?.email) {
     return <SetupAccount email={user.email} onSuccess={handleSetupSuccess} />;
   }
 
-  // If Supabase is configured but user is not logged in, show Auth screen
   if (configStatus.supabase && !user) {
     return <Auth />;
   }
@@ -174,9 +169,8 @@ function App() {
               <div className="flex items-center justify-center gap-4 bg-white py-2 px-4 rounded-full shadow-sm border border-slate-200">
                 <div className="text-xs text-slate-500">
                   <span className="block font-medium text-slate-800">{userProfile?.full_name || user.email}</span>
-                  {(hasAdminAccess) && (
-                    <span className="text-indigo-600 font-bold">Administrator</span>
-                  )}
+                  {isAdmin && <span className="text-purple-600 font-bold">Administrator</span>}
+                  {isSuperuser && <span className="text-indigo-600 font-bold">Superuser</span>}
                 </div>
                 <button 
                   onClick={handleSignOut}
@@ -208,14 +202,14 @@ function App() {
               >
                 My Invoices
               </button>
-              {hasAdminAccess && (
+              {hasDashboardAccess && (
                 <button
                   onClick={() => setActiveTab('admin')}
                   className={`px-6 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
                     activeTab === 'admin' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
                   }`}
                 >
-                  Admin & Projects
+                  {isAdmin ? 'System & Projects' : 'Projects & Team'}
                 </button>
               )}
             </div>
@@ -262,16 +256,17 @@ function App() {
             </div>
           )}
 
-          {activeTab === 'admin' && user && hasAdminAccess && (
-            <AdminDashboard currentUserId={user.id} />
+          {activeTab === 'admin' && userProfile && (
+            <AdminDashboard 
+              profile={userProfile} 
+            />
           )}
           
         </div>
       </div>
       
-      {/* Footer Version Indicator */}
       <div className="mt-12 text-center py-4 text-xs text-slate-300">
-        Movie Accountant v1.3
+        Movie Accountant v2.0
       </div>
     </div>
   );

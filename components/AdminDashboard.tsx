@@ -10,99 +10,77 @@ import {
   fetchProjects,
   uploadBudget
 } from '../services/supabaseService';
-import { Profile, UserInvitation, Project, ProjectRole } from '../types';
+import { Profile, UserInvitation, Project, ProjectRole, AppRole } from '../types';
 
 interface AdminDashboardProps {
-  currentUserId: string;
+  profile: Profile;
 }
 
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
-  // Common Data
+const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
+  // Data State
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [invitations, setInvitations] = useState<UserInvitation[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [currentUserEmail, setCurrentUserEmail] = useState<string>('');
 
   // UI State
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'users' | 'projects' | 'team'>('users');
+  const [activeTab, setActiveTab] = useState<'system' | 'projects' | 'team'>('projects');
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [showSql, setShowSql] = useState(false);
 
-  // Forms
+  // Invitation Forms
   const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteRole, setInviteRole] = useState<ProjectRole>('lineproducer');
+  const [inviteAppRole, setInviteAppRole] = useState<AppRole>('superuser');
+  const [inviteProjectRole, setInviteProjectRole] = useState<ProjectRole>('lineproducer');
   const [inviteProjectId, setInviteProjectId] = useState<string>('');
   const [isInviting, setIsInviting] = useState(false);
 
+  // Project Forms
   const [projectName, setProjectName] = useState('');
   const [projectCurrency, setProjectCurrency] = useState('CZK');
   const [isCreatingProject, setIsCreatingProject] = useState(false);
 
-  // Budget Upload
+  // Budget
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const [uploadingBudget, setUploadingBudget] = useState(false);
 
-  useEffect(() => {
-    // Initial email check from prop or session
-    // We will refine this once profiles load
-    loadData();
-  }, []);
+  const isAdmin = profile.app_role === 'admin';
 
-  const isMasterUser = (email: string) => email?.toLowerCase() === 'tadekus@gmail.com';
-  
-  // We determine Master status based on the current user's email
-  const amIMaster = isMasterUser(currentUserEmail || 'tadekus@gmail.com');
+  useEffect(() => {
+    // Set default tab based on role
+    if (isAdmin) setActiveTab('system');
+    else setActiveTab('projects');
+    
+    loadData();
+  }, [isAdmin]);
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
-      // 1. Fetch Projects (Superusers need this first)
-      const projs = await fetchProjects().catch(e => {
-        console.warn("Failed to fetch projects:", e);
-        return [];
-      });
-      setProjects(projs);
-
-      // 2. Fetch Invitations
-      const invites = await fetchPendingInvitations().catch(e => {
-        console.warn("Failed to fetch invites:", e);
-        return [];
-      });
-      setInvitations(invites);
-
-      // 3. Fetch Profiles (This was causing the recursion crash)
-      const profs = await fetchAllProfiles().catch(e => {
-        console.error("Critical: Failed to fetch profiles:", e);
-        setError("Database permission error. Please run the SQL fix script.");
-        return [];
-      });
-      setProfiles(profs);
+      const [projs, invites, profs] = await Promise.all([
+         fetchProjects().catch(e => []),
+         fetchPendingInvitations().catch(e => []),
+         fetchAllProfiles().catch(e => {
+             // Only log critical if we expect to see profiles (Admin)
+             if(isAdmin) console.error("Profile fetch error:", e);
+             return [];
+         })
+      ]);
       
-      // Update current user email from profile if found
-      const me = profs.find(p => p.id === currentUserId);
-      if(me) {
-        setCurrentUserEmail(me.email);
-        // Reset tab logic based on confirmed identity
-        if (isMasterUser(me.email)) {
-            setActiveTab('users');
-        } else if (activeTab === 'users') {
-            // If I'm not master but tab is 'users' (default), switch to projects
-            setActiveTab('projects');
-        }
-      }
+      setProjects(projs);
+      setInvitations(invites);
+      setProfiles(profs);
 
     } catch (err: any) {
       console.error(err);
-      setError("Failed to load dashboard data. Permissions might need fixing.");
+      setError("Failed to load dashboard data.");
     } finally {
       setLoading(false);
     }
   };
-
-  // --- ACTIONS ---
 
   const handleSendInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,13 +91,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     setSuccessMsg(null);
     
     try {
-      if (amIMaster) {
-         // Master always invites Superusers (no role/project needed)
-         await sendSystemInvitation(inviteEmail);
+      if (activeTab === 'system') {
+         // Admin inviting Admin/Superuser
+         await sendSystemInvitation(inviteEmail, inviteAppRole, null, null);
       } else {
-         // Superuser invites Team Members
+         // Superuser inviting Team Member
          if (!inviteProjectId) throw new Error("Please select a project.");
-         await sendSystemInvitation(inviteEmail, inviteRole, parseInt(inviteProjectId));
+         await sendSystemInvitation(inviteEmail, null, inviteProjectRole, parseInt(inviteProjectId));
       }
 
       setSuccessMsg(`Invitation sent to ${inviteEmail}`);
@@ -140,7 +118,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
       setError(null);
       try {
           await createProject(projectName, projectCurrency);
-          // Refresh list to include new project and any budget structures
           const updatedProjs = await fetchProjects(); 
           setProjects(updatedProjs);
           setProjectName('');
@@ -160,20 +137,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
   const handleBudgetFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0] || !selectedProjectId) return;
     const file = e.target.files[0];
-    
     setUploadingBudget(true);
     setError(null);
-    
     try {
         const text = await file.text();
         await uploadBudget(selectedProjectId, file.name, text);
         setSuccessMsg(`Budget ${file.name} uploaded!`);
-        
-        // Refresh projects to show new budget count
         const updatedProjs = await fetchProjects();
         setProjects(updatedProjs);
     } catch (err: any) {
-        setError("Failed to upload budget: " + err.message);
+        setError("Failed to upload: " + err.message);
     } finally {
         setUploadingBudget(false);
         setSelectedProjectId(null);
@@ -181,13 +154,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     }
   };
 
-  const handleToggleDisabled = async (profile: Profile) => {
-    if (profile.id === currentUserId) return;
-    const newValue = !profile.is_disabled;
-    if (window.confirm(`Are you sure you want to ${newValue ? 'disable' : 'enable'} ${profile.email}?`)) {
+  const handleToggleDisabled = async (p: Profile) => {
+    if (p.id === profile.id) return; // Can't disable self
+    const newValue = !p.is_disabled;
+    if (window.confirm(`Are you sure you want to ${newValue ? 'SUSPEND' : 'ACTIVATE'} ${p.email}?`)) {
       try {
-        await toggleUserDisabled(profile.id, newValue);
-        setProfiles(profiles.map(p => p.id === profile.id ? {...p, is_disabled: newValue} : p));
+        await toggleUserDisabled(p.id, newValue);
+        setProfiles(profiles.map(item => item.id === p.id ? {...item, is_disabled: newValue} : item));
       } catch (err) { setError("Failed to update status"); }
     }
   };
@@ -200,221 +173,312 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUserId }) => {
     } catch(err) { setError("Failed to revoke invitation"); }
   };
 
+  const getMigrationSql = () => `
+-- 1. ADD ROLE COLUMNS
+DO $$ 
+BEGIN
+    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
+    ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role text;
+EXCEPTION WHEN others THEN null; END $$;
+
+-- 2. MIGRATE TADEKUS TO ADMIN
+UPDATE profiles SET app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com';
+
+-- 3. MIGRATE OLD SUPERUSERS
+UPDATE profiles SET app_role = 'superuser' 
+WHERE is_superuser = true AND lower(email) != 'tadekus@gmail.com';
+
+-- 4. UPDATE PERMISSION FUNCTION
+CREATE OR REPLACE FUNCTION claim_invited_role()
+RETURNS text AS $$
+DECLARE
+  inv_record record;
+  current_email text;
+BEGIN
+  SET search_path = public, auth;
+  SELECT lower(email) INTO current_email FROM auth.users WHERE id = auth.uid();
+  
+  SELECT * FROM public.user_invitations 
+  WHERE lower(email) = current_email AND status = 'pending'
+  LIMIT 1 INTO inv_record;
+
+  IF inv_record.id IS NOT NULL THEN
+    UPDATE public.profiles SET invited_by = inv_record.invited_by WHERE id = auth.uid();
+    
+    -- Assign System Role if present
+    IF inv_record.target_app_role IS NOT NULL THEN
+       UPDATE public.profiles SET app_role = inv_record.target_app_role WHERE id = auth.uid();
+    ELSE
+       -- Default behavior for Project Invites
+       UPDATE public.profiles SET app_role = 'user' WHERE id = auth.uid();
+       
+       IF inv_record.target_project_id IS NOT NULL THEN
+          INSERT INTO public.project_assignments (project_id, user_id, role)
+          VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role)
+          ON CONFLICT DO NOTHING;
+       END IF;
+    END IF;
+
+    UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
+    RETURN 'Role Claimed: ' || coalesce(inv_record.target_app_role, 'User');
+  ELSE
+    RETURN 'No pending invitation found';
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 5. UPDATE RLS FOR ADMIN VISIBILITY
+DROP POLICY IF EXISTS "View profiles strict" ON profiles;
+CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
+USING (
+   (select app_role from profiles where id = auth.uid()) = 'admin' -- Admins see all
+   OR id = auth.uid()                                              -- Self
+   OR invited_by = auth.uid()                                      -- My Invitees
+);
+
+-- 6. ADMINS CAN UPDATE USERS (For Disabling)
+DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
+CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
+USING ( (select app_role from profiles where id = auth.uid()) = 'admin' );
+`;
+
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
 
   return (
-    <div className="space-y-8 animate-fade-in pb-12">
-      {error && (
-        <div className="bg-red-50 border border-red-100 text-red-700 p-4 rounded-lg flex flex-col gap-2">
-          <p className="font-bold flex items-center">
-            <svg className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            Error
-          </p>
-          <p>{error}</p>
-        </div>
-      )}
-      
+    <div className="space-y-6 animate-fade-in pb-12">
+      {error && <div className="bg-red-50 text-red-700 p-4 rounded-lg border border-red-100">{error}</div>}
       {successMsg && <div className="bg-emerald-50 text-emerald-600 p-4 rounded-lg">{successMsg}</div>}
-      
-      {/* TABS FOR SUPERUSERS */}
-      {!amIMaster && (
-          <div className="flex space-x-4 border-b border-slate-200">
-              <button 
-                  onClick={() => setActiveTab('projects')}
-                  className={`pb-2 px-4 font-medium text-sm ${activeTab === 'projects' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}
-              >
-                  My Projects
-              </button>
-              <button 
-                  onClick={() => setActiveTab('team')}
-                  className={`pb-2 px-4 font-medium text-sm ${activeTab === 'team' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}
-              >
-                  My Team & Invites
-              </button>
-          </div>
-      )}
 
-      {/* MASTER VIEW: USERS ONLY */}
-      {amIMaster && (
-         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-purple-900 rounded-xl shadow-md p-6 text-white h-fit">
-                <h3 className="text-lg font-bold mb-2">Invite Superuser</h3>
-                <p className="text-purple-200 text-xs mb-4">Grant full project creation rights.</p>
-                <form onSubmit={handleSendInvite} className="flex flex-col gap-3">
-                    <input
-                        type="email"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                        placeholder="superuser@example.com"
-                        className="w-full px-4 py-2 rounded text-slate-900 text-sm outline-none"
-                    />
-                    <button type="submit" disabled={isInviting} className="bg-purple-500 hover:bg-purple-400 text-white py-2 rounded font-bold text-sm">
-                        {isInviting ? 'Sending...' : 'Invite Admin'}
+      {/* TABS */}
+      <div className="flex border-b border-slate-200">
+          {isAdmin && (
+             <button onClick={() => setActiveTab('system')}
+                className={`px-6 py-3 font-medium text-sm ${activeTab === 'system' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}>
+                System Management
+             </button>
+          )}
+          <button onClick={() => setActiveTab('projects')}
+             className={`px-6 py-3 font-medium text-sm ${activeTab === 'projects' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}>
+             Projects
+          </button>
+          <button onClick={() => setActiveTab('team')}
+             className={`px-6 py-3 font-medium text-sm ${activeTab === 'team' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}>
+             Team
+          </button>
+      </div>
+
+      {/* === SYSTEM TAB (ADMIN ONLY) === */}
+      {isAdmin && activeTab === 'system' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Invite Form */}
+            <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-fit">
+                <h3 className="font-bold text-slate-800 mb-4">Invite New User</h3>
+                <form onSubmit={handleSendInvite} className="flex flex-col gap-4">
+                    <div>
+                        <label className="text-xs font-semibold text-slate-500 uppercase">Email Address</label>
+                        <input type="email" required value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
+                           className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="email@example.com" />
+                    </div>
+                    <div>
+                        <label className="text-xs font-semibold text-slate-500 uppercase">System Role</label>
+                        <select value={inviteAppRole} onChange={e => setInviteAppRole(e.target.value as AppRole)}
+                           className="w-full mt-1 px-3 py-2 border rounded text-sm bg-slate-50">
+                            <option value="admin">Administrator</option>
+                            <option value="superuser">Superuser</option>
+                        </select>
+                        <p className="text-xs text-slate-400 mt-1">
+                            {inviteAppRole === 'admin' ? 'Full system access.' : 'Can manage projects and invite team members.'}
+                        </p>
+                    </div>
+                    <button type="submit" disabled={isInviting} className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded font-medium text-sm">
+                        {isInviting ? 'Sending...' : 'Send Invitation'}
                     </button>
                 </form>
-            </div>
-            
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                <h3 className="text-sm font-bold text-slate-500 uppercase mb-4">All Superusers</h3>
-                <div className="space-y-2">
-                    {profiles.filter(p => p.is_superuser && !isMasterUser(p.email)).map(p => (
-                        <div key={p.id} className="flex justify-between items-center p-2 bg-slate-50 rounded">
-                            <span className="text-sm font-medium">{p.full_name || p.email}</span>
-                            <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full">Superuser</span>
+
+                <div className="mt-8 pt-6 border-t border-slate-100">
+                    <button onClick={() => setShowSql(!showSql)} className="text-xs text-slate-400 hover:text-indigo-600 underline">
+                        {showSql ? 'Hide SQL' : 'Show Database Migration SQL'}
+                    </button>
+                    {showSql && (
+                        <div className="mt-2 bg-slate-900 text-slate-300 p-3 rounded text-xs font-mono overflow-x-auto">
+                            <pre>{getMigrationSql()}</pre>
+                            <p className="mt-2 text-yellow-500">Run this in Supabase SQL Editor to enable Role-Based Access.</p>
                         </div>
-                    ))}
-                    {profiles.filter(p => p.is_superuser && !isMasterUser(p.email)).length === 0 && (
-                        <p className="text-slate-400 text-sm italic">No superusers invited yet.</p>
                     )}
                 </div>
             </div>
-         </div>
+
+            {/* User List */}
+            <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="p-6 border-b border-slate-100">
+                    <h3 className="font-bold text-slate-800">All Users</h3>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-50 text-slate-500 font-medium">
+                            <tr>
+                                <th className="px-6 py-3">User</th>
+                                <th className="px-6 py-3">Role</th>
+                                <th className="px-6 py-3">Status</th>
+                                <th className="px-6 py-3 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {profiles.map(p => (
+                                <tr key={p.id} className="hover:bg-slate-50">
+                                    <td className="px-6 py-4">
+                                        <div className="font-medium text-slate-900">{p.full_name || 'Pending Setup'}</div>
+                                        <div className="text-slate-500 text-xs">{p.email}</div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        {p.app_role === 'admin' && <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-bold">Administrator</span>}
+                                        {p.app_role === 'superuser' && <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs font-bold">Superuser</span>}
+                                        {(!p.app_role || p.app_role === 'user') && <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded-full text-xs">User</span>}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        {p.is_disabled 
+                                            ? <span className="text-red-500 font-medium">Suspended</span>
+                                            : <span className="text-emerald-600 font-medium">Active</span>}
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                        {p.id !== profile.id && (
+                                            <button onClick={() => handleToggleDisabled(p)} 
+                                                className={`text-xs font-medium hover:underline ${p.is_disabled ? 'text-emerald-600' : 'text-red-500'}`}>
+                                                {p.is_disabled ? 'Activate' : 'Suspend'}
+                                            </button>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
       )}
 
-      {/* SUPERUSER VIEW: PROJECTS */}
-      {!amIMaster && activeTab === 'projects' && (
+      {/* === PROJECTS TAB === */}
+      {activeTab === 'projects' && (
           <div className="space-y-8">
-              <div className="bg-indigo-900 rounded-xl shadow-md p-6 text-white">
-                  <h3 className="text-lg font-bold mb-4">Create New Project</h3>
-                  <form onSubmit={handleCreateProject} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                      <div className="flex flex-col gap-1">
-                          <label className="text-xs text-indigo-300">Project Name</label>
-                          <input 
-                             type="text" required value={projectName} onChange={e => setProjectName(e.target.value)}
-                             className="px-3 py-2 rounded text-slate-900 text-sm" placeholder="e.g. Summer Commercial"
-                          />
-                      </div>
-                      <div className="flex flex-col gap-1">
-                          <label className="text-xs text-indigo-300">Currency</label>
-                          <select 
-                             value={projectCurrency} onChange={e => setProjectCurrency(e.target.value)}
-                             className="px-3 py-2 rounded text-slate-900 text-sm"
-                          >
-                              <option value="CZK">CZK (Kč)</option>
-                              <option value="EUR">EUR (€)</option>
-                              <option value="USD">USD ($)</option>
-                          </select>
-                      </div>
-                      <button type="submit" disabled={isCreatingProject} className="bg-indigo-500 hover:bg-indigo-400 text-white py-2 rounded font-bold text-sm">
-                          Create Project
-                      </button>
-                  </form>
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 flex flex-col md:flex-row gap-4 items-end">
+                  <div className="flex-1 w-full">
+                      <label className="text-xs font-bold text-slate-500 uppercase">New Project Name</label>
+                      <input type="text" value={projectName} onChange={e => setProjectName(e.target.value)}
+                         className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="e.g. Autumn Commercial" />
+                  </div>
+                  <div className="w-32">
+                      <label className="text-xs font-bold text-slate-500 uppercase">Currency</label>
+                      <select value={projectCurrency} onChange={e => setProjectCurrency(e.target.value)}
+                         className="w-full mt-1 px-3 py-2 border rounded text-sm bg-white">
+                          <option value="CZK">CZK</option>
+                          <option value="EUR">EUR</option>
+                          <option value="USD">USD</option>
+                      </select>
+                  </div>
+                  <button onClick={handleCreateProject} disabled={isCreatingProject} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded font-medium text-sm h-[38px]">
+                      Create
+                  </button>
               </div>
 
-              {/* Hidden file input for budgets */}
-              <input 
-                  type="file" 
-                  accept=".xml" 
-                  ref={fileInputRef} 
-                  onChange={handleBudgetFileChange} 
-                  className="hidden" 
-              />
+               {/* Hidden file input */}
+               <input type="file" accept=".xml" ref={fileInputRef} onChange={handleBudgetFileChange} className="hidden" />
 
               <div className="grid grid-cols-1 gap-4">
                   {projects.map(proj => (
-                      <div key={proj.id} className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col md:flex-row justify-between items-center shadow-sm gap-4">
+                      <div key={proj.id} className="bg-white border border-slate-200 rounded-xl p-6 flex justify-between items-center shadow-sm">
                           <div>
-                              <h4 className="text-lg font-bold text-slate-800">{proj.name}</h4>
-                              <p className="text-xs text-slate-500">Created {new Date(proj.created_at).toLocaleDateString()} • {proj.currency}</p>
-                              <div className="mt-2 text-xs text-slate-400">
-                                  {proj.budgets?.length || 0} budget versions loaded
+                              <h4 className="font-bold text-slate-800 text-lg">{proj.name}</h4>
+                              <p className="text-xs text-slate-500">{proj.currency} • Created {new Date(proj.created_at).toLocaleDateString()}</p>
+                              <div className="mt-2 text-xs text-slate-400 bg-slate-50 inline-block px-2 py-1 rounded">
+                                  {proj.budgets?.length || 0} budget versions
                               </div>
                           </div>
-                          <div className="flex gap-3">
-                             <button 
-                                onClick={() => handleBudgetClick(proj.id)}
-                                disabled={uploadingBudget}
-                                className="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded font-medium flex items-center transition-colors"
-                             >
-                                {uploadingBudget && selectedProjectId === proj.id ? (
-                                    <div className="w-4 h-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin mr-2"></div>
-                                ) : (
-                                    <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                                    </svg>
-                                )}
-                                Upload Budget XML
-                             </button>
-                          </div>
+                          <button onClick={() => handleBudgetClick(proj.id)} disabled={uploadingBudget}
+                             className="text-sm border border-slate-300 hover:bg-slate-50 px-4 py-2 rounded font-medium text-slate-600 flex items-center">
+                              {uploadingBudget && selectedProjectId === proj.id ? 'Uploading...' : 'Upload Budget XML'}
+                          </button>
                       </div>
                   ))}
-                  {projects.length === 0 && <p className="text-center text-slate-400 py-8">You haven&apos;t created any projects yet.</p>}
+                  {projects.length === 0 && <p className="text-center text-slate-400 py-8">No projects found.</p>}
               </div>
           </div>
       )}
 
-      {/* SUPERUSER VIEW: TEAM */}
-      {!amIMaster && activeTab === 'team' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              <div className="bg-slate-800 rounded-xl shadow-md p-6 text-white h-fit">
-                  <h3 className="text-lg font-bold mb-2">Invite Team Member</h3>
-                  <form onSubmit={handleSendInvite} className="flex flex-col gap-3">
-                      <input
-                          type="email" required
-                          value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)}
-                          placeholder="crew@example.com"
-                          className="w-full px-4 py-2 rounded text-slate-900 text-sm"
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                          <select 
-                             value={inviteRole} onChange={(e) => setInviteRole(e.target.value as ProjectRole)}
-                             className="px-3 py-2 rounded text-slate-900 text-sm"
-                          >
-                              <option value="lineproducer">Line Producer</option>
-                              <option value="producer">Producer</option>
-                              <option value="accountant">Accountant</option>
-                          </select>
-                          <select 
-                             value={inviteProjectId} onChange={(e) => setInviteProjectId(e.target.value)}
-                             className="px-3 py-2 rounded text-slate-900 text-sm"
-                             required
-                          >
-                              <option value="">Select Project...</option>
-                              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                          </select>
+      {/* === TEAM TAB === */}
+      {activeTab === 'team' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-fit">
+                  <h3 className="font-bold text-slate-800 mb-4">Invite Team Member</h3>
+                  <form onSubmit={handleSendInvite} className="flex flex-col gap-4">
+                      <div>
+                          <label className="text-xs font-bold text-slate-500 uppercase">Email</label>
+                          <input type="email" required value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
+                             className="w-full mt-1 px-3 py-2 border rounded text-sm" placeholder="crew@example.com" />
                       </div>
-                      <button type="submit" disabled={isInviting} className="bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded font-bold text-sm">
-                          {isInviting ? 'Sending...' : 'Send Invitation'}
+                      <div className="grid grid-cols-2 gap-2">
+                         <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase">Role</label>
+                            <select value={inviteProjectRole} onChange={e => setInviteProjectRole(e.target.value as ProjectRole)}
+                               className="w-full mt-1 px-3 py-2 border rounded text-sm bg-white">
+                                <option value="lineproducer">Line Producer</option>
+                                <option value="producer">Producer</option>
+                                <option value="accountant">Accountant</option>
+                            </select>
+                         </div>
+                         <div>
+                            <label className="text-xs font-bold text-slate-500 uppercase">Project</label>
+                            <select value={inviteProjectId} onChange={e => setInviteProjectId(e.target.value)}
+                               className="w-full mt-1 px-3 py-2 border rounded text-sm bg-white" required>
+                                <option value="">Select...</option>
+                                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                         </div>
+                      </div>
+                      <button type="submit" disabled={isInviting} className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded font-medium text-sm">
+                          Invite to Project
                       </button>
                   </form>
               </div>
 
-              <div className="space-y-6">
-                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                      <h3 className="text-sm font-bold text-slate-500 uppercase mb-4">Pending Invites</h3>
-                      <div className="space-y-2">
-                          {invitations.map(inv => (
-                              <div key={inv.id} className="flex justify-between items-center p-2 bg-slate-50 rounded">
-                                  <div className="flex flex-col">
-                                      <span className="text-sm font-medium">{inv.email}</span>
-                                      <span className="text-xs text-slate-400">
-                                        {inv.target_role ? `${inv.target_role} (Project #${inv.target_project_id})` : 'Superuser'}
-                                      </span>
+              <div className="lg:col-span-2 space-y-6">
+                  {invitations.length > 0 && (
+                      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                          <h3 className="text-xs font-bold text-slate-500 uppercase mb-4">Pending Team Invites</h3>
+                          <div className="space-y-2">
+                              {invitations.map(inv => (
+                                  <div key={inv.id} className="flex justify-between items-center p-3 bg-slate-50 rounded">
+                                      <div>
+                                          <div className="text-sm font-medium text-slate-800">{inv.email}</div>
+                                          <div className="text-xs text-slate-500">
+                                            {inv.target_app_role ? `System: ${inv.target_app_role}` : `Project: ${inv.target_role}`}
+                                          </div>
+                                      </div>
+                                      <button onClick={() => handleRevokeInvitation(inv.id)} className="text-xs text-red-500 hover:underline">Revoke</button>
                                   </div>
-                                  <button onClick={() => handleRevokeInvitation(inv.id)} className="text-xs text-red-500 hover:underline">Revoke</button>
-                              </div>
-                          ))}
-                          {invitations.length === 0 && <p className="text-slate-400 text-xs italic">No pending invites.</p>}
+                              ))}
+                          </div>
                       </div>
-                  </div>
+                  )}
 
                   <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                      <h3 className="text-sm font-bold text-slate-500 uppercase mb-4">My Team</h3>
-                      <div className="space-y-2">
-                          {profiles.filter(p => !p.is_superuser && !isMasterUser(p.email)).map(p => (
-                              <div key={p.id} className="flex justify-between items-center p-2 bg-slate-50 rounded">
-                                  <span className="text-sm font-medium">{p.full_name || p.email}</span>
-                                  <button onClick={() => handleToggleDisabled(p)} className={`text-xs ${p.is_disabled ? 'text-red-500' : 'text-emerald-600'}`}>
-                                      {p.is_disabled ? 'Disabled' : 'Active'}
-                                  </button>
-                              </div>
-                          ))}
-                           {profiles.filter(p => !p.is_superuser && !isMasterUser(p.email)).length === 0 && (
-                            <p className="text-slate-400 text-xs italic">No team members yet.</p>
+                      <h3 className="text-xs font-bold text-slate-500 uppercase mb-4">My Team Members</h3>
+                       {/* Show only regular users in this list to avoid clutter */}
+                       <div className="space-y-2">
+                           {profiles.filter(p => !p.app_role || p.app_role === 'user').map(p => (
+                               <div key={p.id} className="flex justify-between items-center p-3 bg-slate-50 rounded">
+                                   <div>
+                                       <div className="text-sm font-medium text-slate-800">{p.full_name || p.email}</div>
+                                       <div className="text-xs text-slate-500">{p.email}</div>
+                                   </div>
+                                   <button onClick={() => handleToggleDisabled(p)} className={`text-xs font-medium ${p.is_disabled ? 'text-red-500' : 'text-emerald-600'}`}>
+                                       {p.is_disabled ? 'Suspended' : 'Active'}
+                                   </button>
+                               </div>
+                           ))}
+                           {profiles.filter(p => !p.app_role || p.app_role === 'user').length === 0 && (
+                               <p className="text-slate-400 text-sm italic">No team members assigned.</p>
                            )}
-                      </div>
+                       </div>
                   </div>
               </div>
           </div>
