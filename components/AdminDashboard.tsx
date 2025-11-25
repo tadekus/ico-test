@@ -261,7 +261,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === EMERGENCY REPAIR V3: FINAL FIX ===
+-- === EMERGENCY REPAIR V3.2: CASCADE FIX ===
 -- This script completely resets security to fix "Infinite Recursion".
 
 -- 1. DISABLE SECURITY TEMPORARILY (Stop the looping)
@@ -281,6 +281,8 @@ DROP POLICY IF EXISTS "Invitations Admin" ON user_invitations;
 DROP POLICY IF EXISTS "Invitations Self" ON user_invitations;
 DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
 DROP POLICY IF EXISTS "Users manage own sent invites" ON user_invitations;
+DROP POLICY IF EXISTS "Profiles Admin Full" ON profiles;
+DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
 
 -- 3. FIX DATA (Ensure Master Admin exists)
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
@@ -291,9 +293,8 @@ ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
 
 -- 4. CREATE SAFE ROLE CHECK FUNCTION
--- This function runs with "God Mode" privileges (SECURITY DEFINER)
--- It allows policies to check a user's role without triggering RLS loops.
-DROP FUNCTION IF EXISTS public.get_my_role_safe();
+-- Added CASCADE to handle dependencies from previous runs
+DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
 BEGIN
