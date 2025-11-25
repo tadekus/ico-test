@@ -47,25 +47,29 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   const [uploadingBudget, setUploadingBudget] = useState(false);
 
   const isAdmin = profile.app_role === 'admin';
+  const isGhostAdmin = profile.full_name?.includes('(Ghost)');
 
   useEffect(() => {
     // Set default tab based on role
     if (isAdmin) setActiveTab('system');
     else setActiveTab('projects');
     
+    // Auto-show SQL if we are in ghost mode
+    if (isGhostAdmin) setShowSql(true);
+
     loadData();
-  }, [isAdmin]);
+  }, [isAdmin, isGhostAdmin]);
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
+      // If we are ghost admin, profile fetch will likely fail due to RLS, so we skip critical checks
       const [projs, invites, profs] = await Promise.all([
          fetchProjects().catch(e => []),
          fetchPendingInvitations().catch(e => []),
          fetchAllProfiles().catch(e => {
-             // Only log critical if we expect to see profiles (Admin)
-             if(isAdmin) console.error("Profile fetch error:", e);
+             console.error("Profile fetch error (Likely RLS or Missing Record):", e);
              return [];
          })
       ]);
@@ -76,7 +80,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
 
     } catch (err: any) {
       console.error(err);
-      setError("Failed to load dashboard data.");
+      setError("Failed to load some dashboard data.");
     } finally {
       setLoading(false);
     }
@@ -135,7 +139,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const handleBudgetFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !e.target.files[0] || !selectedProjectId) return;
+    if (!e.target.files || !e.target.files.0 || !selectedProjectId) return;
     const file = e.target.files[0];
     setUploadingBudget(true);
     setError(null);
@@ -174,21 +178,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- 1. ADD ROLE COLUMNS
+-- === CRITICAL REPAIR: FIX MASTER PROFILE ===
+INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
+SELECT id, email, 'Master Admin', 'admin', true
+FROM auth.users
+WHERE lower(email) = 'tadekus@gmail.com'
+ON CONFLICT (id) DO UPDATE
+SET app_role = 'admin', is_superuser = true;
+
+-- === 1. ADD ROLE COLUMNS ===
 DO $$ 
 BEGIN
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
     ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role text;
 EXCEPTION WHEN others THEN null; END $$;
 
--- 2. MIGRATE TADEKUS TO ADMIN
+-- === 2. MIGRATE ROLES ===
 UPDATE profiles SET app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com';
+UPDATE profiles SET app_role = 'superuser' WHERE is_superuser = true AND lower(email) != 'tadekus@gmail.com';
 
--- 3. MIGRATE OLD SUPERUSERS
-UPDATE profiles SET app_role = 'superuser' 
-WHERE is_superuser = true AND lower(email) != 'tadekus@gmail.com';
-
--- 4. UPDATE PERMISSION FUNCTION
+-- === 3. UPDATE PERMISSION FUNCTION ===
 CREATE OR REPLACE FUNCTION claim_invited_role()
 RETURNS text AS $$
 DECLARE
@@ -227,7 +236,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 5. UPDATE RLS FOR ADMIN VISIBILITY
+-- === 4. UPDATE RLS FOR VISIBILITY ===
 DROP POLICY IF EXISTS "View profiles strict" ON profiles;
 CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
 USING (
@@ -236,7 +245,6 @@ USING (
    OR invited_by = auth.uid()                                      -- My Invitees
 );
 
--- 6. ADMINS CAN UPDATE USERS (For Disabling)
 DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
 CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
 USING ( (select app_role from profiles where id = auth.uid()) = 'admin' );
@@ -246,6 +254,34 @@ USING ( (select app_role from profiles where id = auth.uid()) = 'admin' );
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
+      {isGhostAdmin && (
+          <div className="bg-red-50 border-l-4 border-red-500 p-4">
+              <div className="flex">
+                  <div className="flex-shrink-0">
+                      <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                      </svg>
+                  </div>
+                  <div className="ml-3">
+                      <p className="text-sm text-red-700 font-bold">
+                          CRITICAL: Admin Profile Missing
+                      </p>
+                      <p className="text-sm text-red-700 mt-1">
+                          You are logged in as Master Admin, but your user profile is missing from the database.
+                          <br/>
+                          <strong>You must run the SQL below to fix permissions.</strong>
+                      </p>
+                      <button 
+                        onClick={() => { setShowSql(true); navigator.clipboard.writeText(getMigrationSql()); }}
+                        className="mt-2 bg-red-100 text-red-800 text-xs px-2 py-1 rounded border border-red-200 hover:bg-red-200"
+                      >
+                          Copy Repair SQL
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {error && <div className="bg-red-50 text-red-700 p-4 rounded-lg border border-red-100">{error}</div>}
       {successMsg && <div className="bg-emerald-50 text-emerald-600 p-4 rounded-lg">{successMsg}</div>}
 

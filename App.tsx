@@ -65,10 +65,26 @@ function App() {
         }
       }
 
-      const profile = await getUserProfile(currentUser.id);
+      let profile = await getUserProfile(currentUser.id);
+
+      // --- CRITICAL REPAIR LOGIC ---
+      // If profile is missing but this is the Master Email, create a 'Ghost' Admin profile
+      // This allows the user to access the Admin Dashboard to run the SQL repair scripts.
+      if (!profile && currentUser.email?.toLowerCase() === 'tadekus@gmail.com') {
+          console.warn("Master User detected with missing profile. Activating Ghost Mode.");
+          profile = {
+              id: currentUser.id,
+              email: currentUser.email,
+              full_name: 'Master Admin (Ghost)',
+              app_role: 'admin',
+              created_at: new Date().toISOString(),
+              is_disabled: false
+          };
+      }
       
       // Fallback: If profile exists but name is empty, force setup
-      if (profile && !profile.full_name) {
+      if (profile && !profile.full_name && profile.app_role !== 'admin') {
+          // Admins might skip setup via SQL injection, so we allow them
           setHasPendingInvite(true);
           setIsLoadingSession(false);
           return;
@@ -266,7 +282,7 @@ function App() {
       </div>
       
       <div className="mt-12 text-center py-4 text-xs text-slate-300">
-        Movie Accountant v2.0
+        Movie Accountant v2.2 - RBAC Edition
       </div>
     </div>
   );
