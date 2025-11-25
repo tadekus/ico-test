@@ -261,29 +261,28 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === EMERGENCY NUCLEAR REPAIR SCRIPT ===
--- Run this to fix "Infinite Recursion" and "Missing Admin" errors.
+-- === EMERGENCY REPAIR V3: FINAL FIX ===
+-- This script completely resets security to fix "Infinite Recursion".
 
--- 1. DISABLE SECURITY (Temporarily stop checks so we can fix data)
+-- 1. DISABLE SECURITY TEMPORARILY (Stop the looping)
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
 
--- 2. DROP ALL EXISTING POLICIES (Clear the slate)
+-- 2. DROP ALL POLICIES (Clean Slate)
+DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
+DROP POLICY IF EXISTS "Profiles Update" ON profiles;
 DROP POLICY IF EXISTS "View Profiles Robust" ON profiles;
 DROP POLICY IF EXISTS "View profiles strict" ON profiles;
 DROP POLICY IF EXISTS "View related profiles" ON profiles;
 DROP POLICY IF EXISTS "Read profiles" ON profiles;
-DROP POLICY IF EXISTS "Admin Update Profiles" ON profiles;
 DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
-DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
-DROP POLICY IF EXISTS "Profiles Update" ON profiles;
-
-DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
-DROP POLICY IF EXISTS "Users manage own sent invites" ON user_invitations;
+DROP POLICY IF EXISTS "Admin Update Profiles" ON profiles;
 DROP POLICY IF EXISTS "Invitations Admin" ON user_invitations;
 DROP POLICY IF EXISTS "Invitations Self" ON user_invitations;
+DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
+DROP POLICY IF EXISTS "Users manage own sent invites" ON user_invitations;
 
--- 3. ENSURE ADMIN PROFILE EXISTS (Data Fix)
+-- 3. FIX DATA (Ensure Master Admin exists)
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
@@ -291,56 +290,61 @@ WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
 
--- 4. HELPER FUNCTION (Safe Role Check)
--- This function allows policies to check role without recursion
+-- 4. CREATE SAFE ROLE CHECK FUNCTION
+-- This function runs with "God Mode" privileges (SECURITY DEFINER)
+-- It allows policies to check a user's role without triggering RLS loops.
+DROP FUNCTION IF EXISTS public.get_my_role_safe();
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
 BEGIN
-  -- Security Definer bypasses RLS for this specific query
+  -- SET search_path IS CRITICAL for security definers
   RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- 5. RE-ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations ENABLE ROW LEVEL SECURITY;
 
--- 6. APPLY NEW SIMPLIFIED POLICIES
+-- 6. APPLY NEW POLICIES
 
--- PROFILES: Who can see rows?
+-- PROFILES: General Visibility
 CREATE POLICY "Profiles Visibility" ON profiles FOR SELECT TO authenticated
 USING (
-   -- 1. Master Admin (JWT Check - No Recursion)
-   lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-   -- 2. Self
-   OR id = auth.uid()
-   -- 3. Admins (Function Check)
-   OR public.get_my_role_safe() = 'admin'
-   -- 4. My Invitees (Direct Check)
-   OR invited_by = auth.uid()
-   -- 5. Project Team members (See people in same projects)
-   OR id IN (
+    -- 1. Master Admin (JWT bypass - fastest, no DB lookup)
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    -- 2. Self
+    OR id = auth.uid()
+    -- 3. Admins/Superusers (Safe Function)
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+    -- 4. My Invitees
+    OR invited_by = auth.uid()
+    -- 5. Team Members (Shared Projects)
+    OR id IN (
        SELECT user_id FROM project_assignments 
        WHERE project_id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid())
-   )
+    )
 );
 
--- PROFILES: Who can update?
-CREATE POLICY "Profiles Update" ON profiles FOR UPDATE TO authenticated
+-- PROFILES: Admin Full Access
+CREATE POLICY "Profiles Admin Full" ON profiles FOR ALL TO authenticated
 USING (
-   lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-   OR public.get_my_role_safe() = 'admin'
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    OR public.get_my_role_safe() = 'admin'
 );
 
--- INVITATIONS: Who can see/manage?
-CREATE POLICY "Invitations Admin" ON user_invitations FOR ALL TO authenticated
+-- INVITATIONS: Visibility & Management
+CREATE POLICY "Invitations Visibility" ON user_invitations FOR ALL TO authenticated
 USING (
-   lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-   OR public.get_my_role_safe() = 'admin'
+    -- Master Admin
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    -- Admins/Superusers
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+    -- Self (Own invites sent)
+    OR invited_by = auth.uid()
+    -- Self (Own invites received - for setup)
+    OR lower(email) = lower(auth.jwt() ->> 'email')
 );
-
-CREATE POLICY "Invitations Self" ON user_invitations FOR ALL TO authenticated
-USING ( invited_by = auth.uid() );
 `;
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
