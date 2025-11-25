@@ -110,6 +110,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
       setInvitations(updatedInvites);
     } catch (err: any) {
       setError(err.message || "Failed to send invitation");
+      if (err.message?.includes("recursion")) {
+         setShowSql(true);
+         setError("Database Error: Infinite Recursion. Please run the Repair SQL below.");
+      }
     } finally {
       setIsInviting(false);
     }
@@ -178,76 +182,62 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === 1. ADD ROLE COLUMNS FIRST ===
+-- === 1. ADD COLUMNS (If Missing) ===
 DO $$ 
 BEGIN
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role text DEFAULT 'user';
     ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role text;
 EXCEPTION WHEN others THEN null; END $$;
 
--- === 2. FIX MASTER PROFILE ===
+-- === 2. HELPER FUNCTION TO PREVENT RECURSION ===
+-- This is critical. It allows policies to check roles without triggering infinite loops.
+CREATE OR REPLACE FUNCTION public.get_my_app_role()
+RETURNS text AS $$
+BEGIN
+  RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- === 3. UPDATE RLS FOR VISIBILITY ===
+
+-- PROFILES POLICY
+DROP POLICY IF EXISTS "View profiles strict" ON profiles;
+DROP POLICY IF EXISTS "View related profiles" ON profiles;
+DROP POLICY IF EXISTS "Read profiles" ON profiles;
+
+CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
+USING (
+   public.get_my_app_role() = 'admin' -- Admins see all (Via Helper)
+   OR id = auth.uid()                 -- Self
+   OR invited_by = auth.uid()         -- My Invitees
+);
+
+-- MASTER UPDATE POLICY
+DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
+CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
+USING ( public.get_my_app_role() = 'admin' );
+
+-- === 4. UPDATE OTHER POLICIES ===
+
+-- USER INVITATIONS
+DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
+CREATE POLICY "Master manages all invites" ON user_invitations FOR ALL TO authenticated
+USING ( public.get_my_app_role() = 'admin' );
+
+-- PROJECTS
+DROP POLICY IF EXISTS "Master manages all projects" ON projects;
+CREATE POLICY "Master manages all projects" ON projects FOR ALL TO authenticated
+USING ( public.get_my_app_role() = 'admin' );
+
+
+-- === 5. FIX MASTER PROFILE ===
+-- Ensures tadekus is an admin
 INSERT INTO public.profiles (id, email, full_name, app_role, is_superuser)
 SELECT id, email, 'Master Admin', 'admin', true
 FROM auth.users
 WHERE lower(email) = 'tadekus@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
-
--- === 3. MIGRATE ROLES ===
-UPDATE profiles SET app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com';
-UPDATE profiles SET app_role = 'superuser' WHERE is_superuser = true AND lower(email) != 'tadekus@gmail.com';
-
--- === 4. UPDATE PERMISSION FUNCTION ===
-CREATE OR REPLACE FUNCTION claim_invited_role()
-RETURNS text AS $$
-DECLARE
-  inv_record record;
-  current_email text;
-BEGIN
-  SET search_path = public, auth;
-  SELECT lower(email) INTO current_email FROM auth.users WHERE id = auth.uid();
-  
-  SELECT * FROM public.user_invitations 
-  WHERE lower(email) = current_email AND status = 'pending'
-  LIMIT 1 INTO inv_record;
-
-  IF inv_record.id IS NOT NULL THEN
-    UPDATE public.profiles SET invited_by = inv_record.invited_by WHERE id = auth.uid();
-    
-    -- Assign System Role if present
-    IF inv_record.target_app_role IS NOT NULL THEN
-       UPDATE public.profiles SET app_role = inv_record.target_app_role WHERE id = auth.uid();
-    ELSE
-       -- Default behavior for Project Invites
-       UPDATE public.profiles SET app_role = 'user' WHERE id = auth.uid();
-       
-       IF inv_record.target_project_id IS NOT NULL THEN
-          INSERT INTO public.project_assignments (project_id, user_id, role)
-          VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role)
-          ON CONFLICT DO NOTHING;
-       END IF;
-    END IF;
-
-    UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
-    RETURN 'Role Claimed: ' || coalesce(inv_record.target_app_role, 'User');
-  ELSE
-    RETURN 'No pending invitation found';
-  END IF;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- === 5. UPDATE RLS FOR VISIBILITY ===
-DROP POLICY IF EXISTS "View profiles strict" ON profiles;
-CREATE POLICY "View profiles strict" ON profiles FOR SELECT TO authenticated
-USING (
-   (select app_role from profiles where id = auth.uid()) = 'admin' -- Admins see all
-   OR id = auth.uid()                                              -- Self
-   OR invited_by = auth.uid()                                      -- My Invitees
-);
-
-DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
-CREATE POLICY "Master updates profiles" ON profiles FOR UPDATE TO authenticated
-USING ( (select app_role from profiles where id = auth.uid()) = 'admin' );
 `;
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
@@ -264,12 +254,12 @@ USING ( (select app_role from profiles where id = auth.uid()) = 'admin' );
                   </div>
                   <div className="ml-3">
                       <p className="text-sm text-red-700 font-bold">
-                          CRITICAL: Admin Profile Missing
+                          CRITICAL: Admin Profile Missing or Broken
                       </p>
                       <p className="text-sm text-red-700 mt-1">
-                          You are logged in as Master Admin, but your user profile is missing from the database.
+                          You are logged in as Master Admin, but your database permissions are causing errors (Infinite Recursion).
                           <br/>
-                          <strong>You must run the SQL below to fix permissions.</strong>
+                          <strong>You must run the Repair SQL below to fix the policies.</strong>
                       </p>
                       <button 
                         onClick={() => { setShowSql(true); navigator.clipboard.writeText(getMigrationSql()); }}
