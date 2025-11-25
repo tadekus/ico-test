@@ -261,7 +261,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === SCORCHED EARTH REPAIR V5.0 (Fix Deletion) ===
+-- === SCORCHED EARTH REPAIR V5.1 (Policy Cleanup) ===
 -- 1. DISABLE SECURITY on ALL tables to stop the loop immediately
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
@@ -269,21 +269,30 @@ ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
 ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
 ALTER TABLE budgets DISABLE ROW LEVEL SECURITY;
 
--- 2. DROP ALL POLICIES on ALL tables (Remove hidden dependencies)
+-- 2. DROP ALL POLICIES on ALL tables (Remove hidden dependencies & old names)
+-- Profiles
 DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
 DROP POLICY IF EXISTS "Profiles Admin Full" ON profiles;
+DROP POLICY IF EXISTS "Profiles Admin Update" ON profiles;
 DROP POLICY IF EXISTS "View related profiles" ON profiles;
 DROP POLICY IF EXISTS "Read profiles" ON profiles;
 DROP POLICY IF EXISTS "Master updates profiles" ON profiles;
 
+-- Invitations
 DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
 DROP POLICY IF EXISTS "Invitations Admin" ON user_invitations;
 DROP POLICY IF EXISTS "Master manages all invites" ON user_invitations;
 
+-- Assignments
+DROP POLICY IF EXISTS "Assignments Admin" ON project_assignments;
+DROP POLICY IF EXISTS "Assignments Read Own" ON project_assignments;
 DROP POLICY IF EXISTS "Superusers manage assignments" ON project_assignments;
 DROP POLICY IF EXISTS "Read own assignments" ON project_assignments;
 DROP POLICY IF EXISTS "Assignments Visibility" ON project_assignments;
 
+-- Projects
+DROP POLICY IF EXISTS "Projects Admin" ON projects;
+DROP POLICY IF EXISTS "Projects Team Read" ON projects;
 DROP POLICY IF EXISTS "Master manages all projects" ON projects;
 DROP POLICY IF EXISTS "Superusers manage own projects" ON projects;
 DROP POLICY IF EXISTS "Team reads assigned projects" ON projects;
@@ -297,39 +306,31 @@ ON CONFLICT (id) DO UPDATE
 SET app_role = 'admin', is_superuser = true;
 
 -- 4. FIX DELETION ISSUES (Cascade Foreign Keys)
--- Ensure that deleting a user from Auth automatically cleans up or updates related data
-
--- Profiles linked to Auth (Strict)
 ALTER TABLE profiles
   DROP CONSTRAINT IF EXISTS profiles_id_fkey,
   ADD CONSTRAINT profiles_id_fkey
   FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
--- Invoices linked to Auth (Cascade)
 ALTER TABLE invoices
   DROP CONSTRAINT IF EXISTS invoices_user_id_fkey,
   ADD CONSTRAINT invoices_user_id_fkey
   FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
 
--- Projects linked to Auth (Set Null - Keep projects if creator deleted)
 ALTER TABLE projects
   DROP CONSTRAINT IF EXISTS projects_created_by_fkey,
   ADD CONSTRAINT projects_created_by_fkey
   FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 
--- Invitations sent by User (Cascade)
 ALTER TABLE user_invitations
   DROP CONSTRAINT IF EXISTS user_invitations_invited_by_fkey,
   ADD CONSTRAINT user_invitations_invited_by_fkey
   FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE CASCADE;
 
--- Profiles invited by User (Set Null - Don't delete the invited person)
 ALTER TABLE profiles
   DROP CONSTRAINT IF EXISTS profiles_invited_by_fkey,
   ADD CONSTRAINT profiles_invited_by_fkey
   FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 
--- Assignments linked to Profile (Cascade)
 ALTER TABLE project_assignments
   DROP CONSTRAINT IF EXISTS project_assignments_user_id_fkey,
   ADD CONSTRAINT project_assignments_user_id_fkey
