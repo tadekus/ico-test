@@ -1,10 +1,9 @@
-
 import { FileData } from '../types';
 import * as XLSX from 'xlsx';
 
 export const readFile = (file: File): Promise<Omit<FileData, 'id' | 'status'>> => {
   return new Promise((resolve, reject) => {
-    const fileType = file.name.toLowerCase().endsWith('.pdf')
+    const fileType: 'pdf' | 'excel' | 'image' = file.name.toLowerCase().endsWith('.pdf')
       ? 'pdf'
       : file.name.toLowerCase().match(/\.(xlsx|xls|csv)$/)
       ? 'excel'
@@ -36,14 +35,14 @@ export const readFile = (file: File): Promise<Omit<FileData, 'id' | 'status'>> =
       } else {
         resolve({
           file,
-          type: fileType as 'pdf' | 'image',
+          type: fileType,
           base64: base64Data,
           preview: fileType === 'image' ? result : undefined
         });
       }
     };
 
-    reader.onerror = (error) => reject(error);
+    reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
 };
@@ -72,7 +71,7 @@ const parseExcel = (file: File): Promise<string> => {
         reject(err);
       }
     };
-    reader.onerror = (err) => reject(err);
+    reader.onerror = () => reject(reader.error);
     reader.readAsBinaryString(file);
   });
 };
