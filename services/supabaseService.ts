@@ -105,13 +105,20 @@ export const adminResetPassword = async (userId: string, newPassword: string) =>
 export const deleteProfile = async (userId: string) => {
   if (!supabase) throw new Error("Supabase not configured");
   
-  // This relies on RLS policy allowing deletion if invited_by = auth.uid()
-  const { error } = await supabase
-    .from('profiles')
-    .delete()
-    .eq('id', userId);
+  // Call the secure RPC function that deletes from auth.users
+  // This triggers a cascade delete to profiles/assignments
+  const { error } = await supabase.rpc('delete_team_member', { target_user_id: userId });
 
-  if (error) throw new Error(`Failed to delete user: ${error.message}`);
+  if (error) {
+     // Fallback for Admins if RPC fails or not updated yet
+     console.warn("RPC delete failed, trying direct table delete", error);
+     const { error: tableError } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', userId);
+        
+     if (tableError) throw new Error(`Failed to delete user: ${error.message}`);
+  }
 };
 
 // --- DATABASE OPERATIONS: INVOICES ---

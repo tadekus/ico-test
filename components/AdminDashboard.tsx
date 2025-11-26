@@ -224,11 +224,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const handleDeleteUser = async (p: Profile) => {
-    if (!window.confirm(`Are you sure you want to DELETE ${p.email}? This action cannot be undone.`)) return;
+    if (!window.confirm(`Are you sure you want to DELETE ${p.email}? This action CANNOT be undone and will prevent them from logging in.`)) return;
     try {
         await deleteProfile(p.id);
         setProfiles(prev => prev.filter(item => item.id !== p.id));
-        setSuccessMsg(`User ${p.email} deleted.`);
+        setSuccessMsg(`User ${p.email} deleted from system.`);
     } catch (err: any) {
         setError(err.message || "Failed to delete user");
     }
@@ -319,9 +319,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
     const userAssigns = allOwnerAssignments.filter(a => a.user_id === userId);
     if (userAssigns.length === 0) return "Unassigned";
     if (userAssigns.length === 1) {
-        return `${userAssigns[0].role} (${userAssigns[0].project?.name})`;
+        return `${formatRoleName(userAssigns[0].role)} (${userAssigns[0].project?.name})`;
     }
     return `${userAssigns.length} Active Roles`;
+  };
+
+  const formatRoleName = (role: string) => {
+      switch(role) {
+          case 'lineproducer': return 'Line Producer';
+          case 'producer': return 'Producer';
+          case 'accountant': return 'Accountant';
+          default: return role;
+      }
   };
 
   // Get users assigned to a specific project for card display
@@ -334,18 +343,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V17 (PROJECT CARD & DELETION) ===
+-- === REPAIR V18 (AUTH DELETE & ROLE FIX) ===
 
--- 1. DISABLE SECURITY TO PREVENT CRASHES
+-- 1. DISABLE SECURITY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
 
--- 2. SETUP EXTENSIONS (Safe)
+-- 2. SETUP EXTENSIONS
 CREATE SCHEMA IF NOT EXISTS extensions;
 CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA extensions;
 
 -- 3. CLEANUP OLD FUNCTIONS
+DROP FUNCTION IF EXISTS public.delete_team_member(uuid) CASCADE;
 DROP FUNCTION IF EXISTS public.claim_invited_role() CASCADE;
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 DROP FUNCTION IF EXISTS public.get_my_team_mates_ids() CASCADE;
@@ -353,7 +363,7 @@ DROP FUNCTION IF EXISTS public.is_project_owner(bigint) CASCADE;
 DROP FUNCTION IF EXISTS public.is_project_member(bigint) CASCADE;
 DROP FUNCTION IF EXISTS public.admin_reset_user_password(uuid, text) CASCADE;
 
--- 4. HELPER FUNCTIONS (SECURITY DEFINER = BYPASS RLS)
+-- 4. HELPER FUNCTIONS (SECURITY DEFINER)
 
 -- Check Role
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
@@ -364,7 +374,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.get_my_role_safe() OWNER TO postgres;
 
--- Check Project Ownership (For Assignments RLS)
+-- Check Project Ownership
 CREATE OR REPLACE FUNCTION public.is_project_owner(pid bigint)
 RETURNS boolean AS $$
 BEGIN
@@ -373,7 +383,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.is_project_owner(bigint) OWNER TO postgres;
 
--- Check Project Membership (For Projects RLS)
+-- Check Project Membership
 CREATE OR REPLACE FUNCTION public.is_project_member(pid bigint)
 RETURNS boolean AS $$
 BEGIN
@@ -382,7 +392,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.is_project_member(bigint) OWNER TO postgres;
 
--- 5. PASSWORD RESET (Fixed Schema Path)
+-- Password Reset
 CREATE OR REPLACE FUNCTION admin_reset_user_password(target_user_id uuid, new_password text)
 RETURNS void AS $$
 BEGIN
@@ -397,6 +407,28 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth, extensions;
 ALTER FUNCTION admin_reset_user_password(uuid, text) OWNER TO postgres;
 
+-- 5. NEW: DELETE TEAM MEMBER (Auth + Profile)
+CREATE OR REPLACE FUNCTION public.delete_team_member(target_user_id uuid)
+RETURNS void AS $$
+DECLARE
+  requesting_user_id uuid;
+BEGIN
+  requesting_user_id := auth.uid();
+  SET search_path = public, auth;
+
+  -- Permission Check: Master Admin OR Inviter
+  IF (lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com') OR
+     EXISTS (SELECT 1 FROM public.profiles WHERE id = target_user_id AND invited_by = requesting_user_id) THEN
+
+     -- Delete from AUTH (cascades to public tables)
+     DELETE FROM auth.users WHERE id = target_user_id;
+  ELSE
+     RAISE EXCEPTION 'Access Denied: You cannot delete this user.';
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+ALTER FUNCTION public.delete_team_member(uuid) OWNER TO postgres;
+
 -- 6. GLOBAL EMAIL CHECK
 CREATE OR REPLACE FUNCTION public.check_email_exists_global(target_email text)
 RETURNS boolean AS $$
@@ -408,7 +440,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.check_email_exists_global(text) OWNER TO postgres;
 
--- 7. CLAIM INVITED ROLE (Assignment Fix)
+-- 7. CLAIM INVITED ROLE
 CREATE OR REPLACE FUNCTION public.claim_invited_role()
 RETURNS text AS $$
 DECLARE
@@ -432,7 +464,7 @@ BEGIN
        -- Set as User
        UPDATE public.profiles SET app_role = 'user', is_superuser = false WHERE id = auth.uid();
        
-       -- Force Assignment Insert (Ignore RLS via function privs)
+       -- Force Assignment Insert
        IF inv_record.target_project_id IS NOT NULL THEN
           INSERT INTO public.project_assignments (project_id, user_id, role)
           VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role)
@@ -460,7 +492,7 @@ BEGIN
   END LOOP;
 END $$;
 
--- 9. NEW LOOP-FREE POLICIES
+-- 9. RE-APPLY POLICIES (No loops)
 
 -- Projects
 CREATE POLICY "Projects Read" ON projects FOR SELECT TO authenticated 
@@ -489,10 +521,7 @@ USING ( id IN (SELECT user_id FROM project_assignments WHERE project_id IN (SELE
 
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated USING ( id = auth.uid() ) WITH CHECK ( id = auth.uid() );
 CREATE POLICY "Profiles Update Admin" ON profiles FOR UPDATE TO authenticated USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_role_safe() = 'admin' );
-
--- ALLOW SUPERUSERS TO DELETE THEIR INVITED USERS
-CREATE POLICY "Profiles Delete Invitees" ON profiles FOR DELETE TO authenticated 
-USING ( invited_by = auth.uid() );
+CREATE POLICY "Profiles Delete Invitees" ON profiles FOR DELETE TO authenticated USING ( invited_by = auth.uid() );
 
 -- Invitations
 CREATE POLICY "Invitations Read" ON user_invitations FOR SELECT TO authenticated USING ( invited_by = auth.uid() OR lower(email) = lower(auth.jwt() ->> 'email') OR public.get_my_role_safe() = 'admin' );
@@ -767,15 +796,20 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                                   <div className="mt-4">
                                       <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">Assigned Team</label>
                                       {assignedUsers.length > 0 ? (
-                                          <div className="flex flex-wrap gap-2">
-                                              {assignedUsers.map(u => (
-                                                  <div key={u.id} className="inline-flex items-center px-2 py-1 bg-slate-100 rounded text-xs text-slate-700" title={u.email}>
-                                                      <span className="font-medium mr-1">{u.full_name?.split(' ')[0] || 'User'}</span>
-                                                      <span className="text-slate-400 text-[10px]">
-                                                          ({allOwnerAssignments.find(a => a.project_id === proj.id && a.user_id === u.id)?.role.substring(0,2).toUpperCase()})
-                                                      </span>
-                                                  </div>
-                                              ))}
+                                          <div className="flex flex-col gap-1.5 mt-2">
+                                              {assignedUsers.map(u => {
+                                                  // Find specific role for THIS project
+                                                  const role = allOwnerAssignments.find(a => a.project_id === proj.id && a.user_id === u.id)?.role;
+                                                  return (
+                                                      <div key={u.id} className="flex items-center text-sm text-slate-700">
+                                                          <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 mr-2"></div>
+                                                          <span className="font-medium mr-1.5">{u.full_name?.split(' ')[0] || 'User'}</span>
+                                                          <span className="text-slate-400 text-xs">
+                                                              — {role ? formatRoleName(role) : 'Member'}
+                                                          </span>
+                                                      </div>
+                                                  );
+                                              })}
                                           </div>
                                       ) : (
                                           <span className="text-xs text-slate-400 italic">No members assigned</span>
@@ -998,7 +1032,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                                        </div>
                                        <div className="flex items-center gap-4">
                                            <span className="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs font-semibold uppercase">
-                                               {assign.role}
+                                               {formatRoleName(assign.role)}
                                            </span>
                                            <button 
                                               onClick={() => handleRemoveAssignment(assign.id)}
