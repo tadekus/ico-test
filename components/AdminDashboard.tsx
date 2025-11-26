@@ -263,7 +263,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V9 (Ironclad Anti-Recursion) ===
+-- === REPAIR V10 (Idempotent Policies) ===
 
 -- 1. DISABLE SECURITY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
@@ -298,10 +298,12 @@ ALTER FUNCTION public.get_my_team_mates_ids() OWNER TO postgres;
 
 -- PROFILES
 -- A. Read Self
+DROP POLICY IF EXISTS "Profiles Read Self" ON profiles;
 CREATE POLICY "Profiles Read Self" ON profiles FOR SELECT TO authenticated
 USING ( id = auth.uid() );
 
 -- B. Read as Admin (Using Safe Function)
+DROP POLICY IF EXISTS "Profiles Read Admin" ON profiles;
 CREATE POLICY "Profiles Read Admin" ON profiles FOR SELECT TO authenticated
 USING ( 
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
@@ -309,21 +311,25 @@ USING (
 );
 
 -- C. Read Invitees
+DROP POLICY IF EXISTS "Profiles Read Invitees" ON profiles;
 CREATE POLICY "Profiles Read Invitees" ON profiles FOR SELECT TO authenticated
 USING ( invited_by = auth.uid() );
 
 -- D. Read Team (Using Safe Function)
+DROP POLICY IF EXISTS "Profiles Read Team" ON profiles;
 CREATE POLICY "Profiles Read Team" ON profiles FOR SELECT TO authenticated
 USING ( id IN (SELECT uid FROM public.get_my_team_mates_ids()) );
 
 
 -- UPDATE POLICIES
 -- A. Update Self (CRITICAL for Account Setup)
+DROP POLICY IF EXISTS "Profiles Update Self" ON profiles;
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated
 USING ( id = auth.uid() )
 WITH CHECK ( id = auth.uid() );
 
 -- B. Admin Update
+DROP POLICY IF EXISTS "Profiles Update Admin" ON profiles;
 CREATE POLICY "Profiles Update Admin" ON profiles FOR UPDATE TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
