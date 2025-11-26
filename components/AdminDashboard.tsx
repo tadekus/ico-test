@@ -14,7 +14,8 @@ import {
   addProjectAssignment,
   removeProjectAssignment,
   fetchAssignmentsForOwner,
-  adminResetPassword
+  adminResetPassword,
+  deleteProfile
 } from '../services/supabaseService';
 import { Profile, UserInvitation, Project, ProjectAssignment, ProjectRole, AppRole } from '../types';
 
@@ -222,6 +223,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
     }
   };
 
+  const handleDeleteUser = async (p: Profile) => {
+    if (!window.confirm(`Are you sure you want to DELETE ${p.email}? This action cannot be undone.`)) return;
+    try {
+        await deleteProfile(p.id);
+        setProfiles(prev => prev.filter(item => item.id !== p.id));
+        setSuccessMsg(`User ${p.email} deleted.`);
+    } catch (err: any) {
+        setError(err.message || "Failed to delete user");
+    }
+  };
+
   const handleRevokeInvitation = async (id: number) => {
     if (!window.confirm("Revoke this invitation?")) return;
     try {
@@ -279,6 +291,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
           const assignments = await fetchProjectAssignments(activeProjectForTeam.id);
           setProjectAssignments(assignments);
           setAssignUserId('');
+          // Also refresh global assignments
+          const globalAssigns = await fetchAssignmentsForOwner(profile.id);
+          setAllOwnerAssignments(globalAssigns);
       } catch (err: any) {
           alert(err.message || "Failed to assign user");
       }
@@ -291,6 +306,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
           // Refresh list
           const assignments = await fetchProjectAssignments(activeProjectForTeam.id);
           setProjectAssignments(assignments);
+          // Refresh global
+          const globalAssigns = await fetchAssignmentsForOwner(profile.id);
+          setAllOwnerAssignments(globalAssigns);
       } catch (err: any) {
           alert(err.message || "Failed to remove user");
       }
@@ -306,8 +324,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
     return `${userAssigns.length} Active Roles`;
   };
 
+  // Get users assigned to a specific project for card display
+  const getAssignedUsersForProject = (projectId: number) => {
+      const assignedIds = allOwnerAssignments
+        .filter(a => a.project_id === projectId)
+        .map(a => a.user_id);
+      
+      return profiles.filter(p => assignedIds.includes(p.id));
+  };
+
   const getMigrationSql = () => `
--- === REPAIR V16 (BREAK CIRCULAR DEPENDENCIES) ===
+-- === REPAIR V17 (PROJECT CARD & DELETION) ===
 
 -- 1. DISABLE SECURITY TO PREVENT CRASHES
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
@@ -327,7 +354,6 @@ DROP FUNCTION IF EXISTS public.is_project_member(bigint) CASCADE;
 DROP FUNCTION IF EXISTS public.admin_reset_user_password(uuid, text) CASCADE;
 
 -- 4. HELPER FUNCTIONS (SECURITY DEFINER = BYPASS RLS)
--- These allow checking permissions without triggering infinite RLS loops.
 
 -- Check Role
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
@@ -463,6 +489,10 @@ USING ( id IN (SELECT user_id FROM project_assignments WHERE project_id IN (SELE
 
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated USING ( id = auth.uid() ) WITH CHECK ( id = auth.uid() );
 CREATE POLICY "Profiles Update Admin" ON profiles FOR UPDATE TO authenticated USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_role_safe() = 'admin' );
+
+-- ALLOW SUPERUSERS TO DELETE THEIR INVITED USERS
+CREATE POLICY "Profiles Delete Invitees" ON profiles FOR DELETE TO authenticated 
+USING ( invited_by = auth.uid() );
 
 -- Invitations
 CREATE POLICY "Invitations Read" ON user_invitations FOR SELECT TO authenticated USING ( invited_by = auth.uid() OR lower(email) = lower(auth.jwt() ->> 'email') OR public.get_my_role_safe() = 'admin' );
@@ -720,14 +750,37 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                <input type="file" accept=".xml" ref={fileInputRef} onChange={handleBudgetFileChange} className="hidden" />
 
               <div className="grid grid-cols-1 gap-4">
-                  {projects.map(proj => (
+                  {projects.map(proj => {
+                      // Get assigned users for this project
+                      const assignedUsers = getAssignedUsersForProject(proj.id);
+                      
+                      return (
                       <div key={proj.id} className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
                           <div className="flex justify-between items-start mb-4">
-                              <div>
+                              <div className="max-w-xl">
                                   <h4 className="font-bold text-slate-800 text-lg">{proj.name}</h4>
                                   {proj.company_name && <p className="text-sm font-medium text-slate-600">{proj.company_name} {proj.ico && `(IČO: ${proj.ico})`}</p>}
                                   {proj.description && <p className="text-sm text-slate-500 mt-1">{proj.description}</p>}
                                   <p className="text-xs text-slate-400 mt-2">{proj.currency} • Created {new Date(proj.created_at).toLocaleDateString()}</p>
+                                  
+                                  {/* Team List on Card */}
+                                  <div className="mt-4">
+                                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">Assigned Team</label>
+                                      {assignedUsers.length > 0 ? (
+                                          <div className="flex flex-wrap gap-2">
+                                              {assignedUsers.map(u => (
+                                                  <div key={u.id} className="inline-flex items-center px-2 py-1 bg-slate-100 rounded text-xs text-slate-700" title={u.email}>
+                                                      <span className="font-medium mr-1">{u.full_name?.split(' ')[0] || 'User'}</span>
+                                                      <span className="text-slate-400 text-[10px]">
+                                                          ({allOwnerAssignments.find(a => a.project_id === proj.id && a.user_id === u.id)?.role.substring(0,2).toUpperCase()})
+                                                      </span>
+                                                  </div>
+                                              ))}
+                                          </div>
+                                      ) : (
+                                          <span className="text-xs text-slate-400 italic">No members assigned</span>
+                                      )}
+                                  </div>
                               </div>
                               <div className="flex flex-col space-y-2">
                                 <button onClick={() => handleBudgetClick(proj.id)} disabled={uploadingBudget}
@@ -755,7 +808,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                               <span>{proj.budgets?.length || 0} budget versions</span>
                           </div>
                       </div>
-                  ))}
+                  )})}
                   {projects.length === 0 && (
                       <div className="text-center py-12 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
                           No projects created yet.
@@ -850,10 +903,19 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                                                 {getUserRolesText(p.id)}
                                             </span>
                                        </td>
-                                       <td className="px-6 py-3 text-right">
+                                       <td className="px-6 py-3 text-right flex items-center justify-end gap-3">
                                            <button onClick={() => handleToggleDisabled(p)} 
-                                               className={`text-xs font-medium hover:underline ${p.is_disabled ? 'text-emerald-600' : 'text-red-500'}`}>
+                                               className={`text-xs font-medium hover:underline ${p.is_disabled ? 'text-emerald-600' : 'text-amber-500'}`}>
                                                {p.is_disabled ? 'Activate' : 'Suspend'}
+                                           </button>
+                                           <button 
+                                              onClick={() => handleDeleteUser(p)}
+                                              className="text-slate-400 hover:text-red-500 transition-colors"
+                                              title="Delete User"
+                                           >
+                                               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                               </svg>
                                            </button>
                                        </td>
                                    </tr>

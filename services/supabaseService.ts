@@ -102,6 +102,18 @@ export const adminResetPassword = async (userId: string, newPassword: string) =>
   if (error) throw new Error(`Failed to reset password: ${error.message}`);
 };
 
+export const deleteProfile = async (userId: string) => {
+  if (!supabase) throw new Error("Supabase not configured");
+  
+  // This relies on RLS policy allowing deletion if invited_by = auth.uid()
+  const { error } = await supabase
+    .from('profiles')
+    .delete()
+    .eq('id', userId);
+
+  if (error) throw new Error(`Failed to delete user: ${error.message}`);
+};
+
 // --- DATABASE OPERATIONS: INVOICES ---
 
 export const saveExtractionResult = async (result: ExtractionResult, projectId?: number) => {
@@ -262,7 +274,7 @@ export const fetchAssignmentsForOwner = async (ownerId: string): Promise<any[]> 
       user_id,
       role,
       project_id,
-      project:projects!inner(name, created_by)
+      project:projects!inner(id, name, created_by)
     `)
     .eq('project.created_by', ownerId);
 
@@ -379,7 +391,7 @@ export const sendSystemInvitation = async (
 
   // Use the robust global check
   if (await checkUserExistsGlobally(targetEmail)) {
-    throw new Error("User already exists or has a pending invitation.");
+    throw new Error("User with this email already exists in the system.");
   }
 
   const user = await getCurrentUser();
