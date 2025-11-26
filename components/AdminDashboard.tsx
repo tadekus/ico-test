@@ -127,6 +127,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
 
       setSuccessMsg(`Invitation sent to ${inviteEmail}`);
       setInviteEmail('');
+      // Refresh invites
       const updatedInvites = await fetchPendingInvitations();
       setInvitations(updatedInvites);
     } catch (err: any) {
@@ -262,81 +263,95 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V8 (Final Anti-Recursion) ===
+-- === REPAIR V9 (Ironclad Anti-Recursion) ===
 
--- 1. DISABLE SECURITY to prevent crashes during repair
+-- 1. DISABLE SECURITY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 
--- 2. CREATE GOD-MODE FUNCTIONS
--- These functions use SECURITY DEFINER to bypass RLS loops.
-
+-- 2. DROP EVERYTHING CASCADE (Clean Slate)
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
+DROP FUNCTION IF EXISTS public.get_my_team_mates_ids() CASCADE;
+DROP FUNCTION IF EXISTS public.is_team_member(uuid) CASCADE;
+
+-- 3. CREATE GOD-MODE FUNCTIONS
+-- CRITICAL: We explicitly set OWNER TO postgres to ensure RLS bypass works.
+
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
 BEGIN
-  -- Returns role of current user (Admin/Superuser/User)
   RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+ALTER FUNCTION public.get_my_role_safe() OWNER TO postgres;
 
-DROP FUNCTION IF EXISTS public.get_my_team_mates_ids() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_my_team_mates_ids()
 RETURNS TABLE (uid uuid) AS $$
 BEGIN
-  -- Returns IDs of users who are in the same projects as me
   RETURN QUERY 
   SELECT user_id FROM project_assignments 
   WHERE project_id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid());
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+ALTER FUNCTION public.get_my_team_mates_ids() OWNER TO postgres;
 
--- 3. DROP OLD POLICIES CASCADE
-DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
-DROP POLICY IF EXISTS "Profiles Admin Update" ON profiles;
-DROP POLICY IF EXISTS "Profiles Update Self" ON profiles;
-DROP POLICY IF EXISTS "Profiles Read" ON profiles;
-DROP POLICY IF EXISTS "View profiles strict" ON profiles;
+-- 4. CREATE POLICIES (Split into Atomic Rules)
 
+-- PROFILES
+-- A. Read Self
+CREATE POLICY "Profiles Read Self" ON profiles FOR SELECT TO authenticated
+USING ( id = auth.uid() );
 
--- 4. CREATE NEW POLICIES (Strict Separation)
-
--- A. READ Policy (Who can see whom)
-CREATE POLICY "Profiles Read" ON profiles FOR SELECT TO authenticated
-USING (
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Master
-    OR public.get_my_role_safe() IN ('admin', 'superuser') -- Admins/Supers
-    OR id = auth.uid() -- Self
-    OR invited_by = auth.uid() -- My Invitees
-    OR id IN (SELECT uid FROM public.get_my_team_mates_ids()) -- Team Mates (Safe)
+-- B. Read as Admin (Using Safe Function)
+CREATE POLICY "Profiles Read Admin" ON profiles FOR SELECT TO authenticated
+USING ( 
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
 );
 
--- B. UPDATE Policy (Who can edit)
--- CRITICAL: This is split to prevent recursion during 'completeAccountSetup'
+-- C. Read Invitees
+CREATE POLICY "Profiles Read Invitees" ON profiles FOR SELECT TO authenticated
+USING ( invited_by = auth.uid() );
+
+-- D. Read Team (Using Safe Function)
+CREATE POLICY "Profiles Read Team" ON profiles FOR SELECT TO authenticated
+USING ( id IN (SELECT uid FROM public.get_my_team_mates_ids()) );
+
+
+-- UPDATE POLICIES
+-- A. Update Self (CRITICAL for Account Setup)
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated
-USING ( id = auth.uid() ) 
+USING ( id = auth.uid() )
 WITH CHECK ( id = auth.uid() );
 
-CREATE POLICY "Profiles Admin Update" ON profiles FOR UPDATE TO authenticated
+-- B. Admin Update
+CREATE POLICY "Profiles Update Admin" ON profiles FOR UPDATE TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
     OR public.get_my_role_safe() = 'admin'
 );
 
+
+-- PROJECT ASSIGNMENTS (Dumb Policies for Safety)
+DROP POLICY IF EXISTS "Assignments Read" ON project_assignments;
+CREATE POLICY "Assignments Read" ON project_assignments FOR SELECT TO authenticated
+USING (
+    user_id = auth.uid()
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+);
+
+DROP POLICY IF EXISTS "Assignments Write" ON project_assignments;
+CREATE POLICY "Assignments Write" ON project_assignments FOR ALL TO authenticated
+USING (
+    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+);
+
 -- 5. RE-ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
 
--- 6. ENSURE FOREIGN KEYS ARE CASCADING (Fix Deletion Error)
-DO $$ BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'projects_created_by_fkey') THEN
-        ALTER TABLE projects DROP CONSTRAINT projects_created_by_fkey;
-        ALTER TABLE projects ADD CONSTRAINT projects_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-    END IF;
-    
-    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'user_invitations_invited_by_fkey') THEN
-        ALTER TABLE user_invitations DROP CONSTRAINT user_invitations_invited_by_fkey;
-        ALTER TABLE user_invitations ADD CONSTRAINT user_invitations_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
-    END IF;
-END $$;
+-- 6. SYSTEM OVERRIDE
+UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com';
 `;
 
   // Merge Profiles and Pending System Invites for the Admin List
@@ -465,8 +480,15 @@ END $$;
                             {pendingSystemInvites.map(inv => (
                                 <tr key={`inv-${inv.id}`} className="bg-amber-50/50 hover:bg-amber-50">
                                     <td className="px-6 py-4">
-                                        <div className="font-medium text-slate-900 italic opacity-75">Pending Setup...</div>
-                                        <div className="text-slate-500 text-xs">{inv.email}</div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600 text-xs font-bold">
+                                                ?
+                                            </div>
+                                            <div>
+                                                <div className="font-medium text-slate-900 italic opacity-75">Pending Setup...</div>
+                                                <div className="text-slate-500 text-xs">{inv.email}</div>
+                                            </div>
+                                        </div>
                                     </td>
                                     <td className="px-6 py-4">
                                         {inv.target_app_role === 'admin' && <span className="px-2 py-1 border border-purple-200 text-purple-600 rounded-full text-xs font-medium">Administrator</span>}
