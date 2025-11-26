@@ -49,7 +49,6 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                 // Remove from staging since it's now in the invoice list
                 setStagedFiles(prev => prev.filter(f => f.id !== file.id));
             } else {
-                // If no project, keep in staging (shouldn't happen with current UI restrictions)
                 setStagedFiles(prev => prev.map(f => f.id === file.id ? { 
                     ...f, 
                     status: 'ready', 
@@ -82,22 +81,26 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
     }
   };
 
+  const formatAmount = (amount: number | null | undefined, currency: string | null) => {
+      if (amount === null || amount === undefined) return '-';
+      const curr = currency || 'CZK';
+      // Format 1000000 -> 1 000 000.00
+      const formattedNum = amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+      return `${formattedNum} ${curr}`;
+  };
+
   const activeInvoice = savedInvoices.find(inv => inv.id === viewingInvoiceId);
   
   // Find the NEXT draft invoice for the "Approve & Next" workflow
-  // We sort by ID or Internal ID to ensure consistent order
+  // We filter out the current one and look for the first draft available
   const draftInvoices = savedInvoices.filter(inv => inv.status === 'draft' && inv.id !== viewingInvoiceId);
-  // Sort drafts so we pick the "next" one in the list (usually newest or oldest depending on workflow, sticking to default sort)
-  // Assuming savedInvoices comes sorted by internal_id desc (newest first). 
-  // If user wants to clear backlog, maybe oldest draft first? 
-  // Let's stick to the current list order which is internal_id DESC.
   const nextDraftId = draftInvoices.length > 0 ? draftInvoices[0].id : null;
 
   // Map SavedInvoice to FileData structure for InvoiceDetail
   const mappedFileData: FileData | null = activeInvoice ? {
       id: activeInvoice.id.toString(),
       file: new File([], "Stored Invoice"), // Placeholder
-      type: 'pdf', // Default assumption, or derive/store in DB
+      type: 'pdf', 
       status: 'saved',
       base64: activeInvoice.file_content || undefined,
       extractionResult: {
@@ -182,11 +185,11 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                <table className="w-full text-sm text-left">
                    <thead className="bg-white text-slate-500 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-sm">
                        <tr>
-                           <th className="px-6 py-3 w-20">#</th>
-                           <th className="px-6 py-3">Status</th>
-                           <th className="px-6 py-3">Supplier</th>
+                           <th className="px-6 py-3 w-20 whitespace-nowrap">#</th>
+                           <th className="px-6 py-3 whitespace-nowrap">Status</th>
+                           <th className="px-6 py-3 whitespace-nowrap">Supplier</th>
                            <th className="px-6 py-3">Description</th>
-                           <th className="px-6 py-3 text-right">Amount</th>
+                           <th className="px-6 py-3 text-right whitespace-nowrap">Amount</th>
                        </tr>
                    </thead>
                    <tbody className="divide-y divide-slate-100">
@@ -195,24 +198,24 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                                onClick={() => setViewingInvoiceId(inv.id)}
                                className="hover:bg-slate-50 transition-colors cursor-pointer group"
                            >
-                               <td className="px-6 py-3 font-mono text-indigo-600 font-bold group-hover:text-indigo-800">
+                               <td className="px-6 py-3 font-mono text-indigo-600 font-bold group-hover:text-indigo-800 whitespace-nowrap">
                                    #{inv.internal_id || '-'}
                                </td>
-                               <td className="px-6 py-3">
+                               <td className="px-6 py-3 whitespace-nowrap">
                                    <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase tracking-wide
                                        ${inv.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                                        {inv.status}
                                    </span>
                                </td>
-                               <td className="px-6 py-3">
-                                   <div className="font-medium text-slate-900">{inv.company_name || 'Unknown'}</div>
+                               <td className="px-6 py-3 whitespace-nowrap">
+                                   <div className="font-medium text-slate-900 truncate max-w-[200px]">{inv.company_name || 'Unknown'}</div>
                                    <div className="text-xs text-slate-500 font-mono">{inv.ico || '-'}</div>
                                </td>
                                <td className="px-6 py-3 text-slate-600 max-w-xs truncate">
                                    {inv.description || '-'}
                                </td>
-                               <td className="px-6 py-3 text-right font-medium text-slate-900">
-                                   {inv.amount_with_vat ? inv.amount_with_vat.toFixed(2) : '-'} <span className="text-xs text-slate-500">{inv.currency}</span>
+                               <td className="px-6 py-3 text-right font-medium text-slate-900 whitespace-nowrap">
+                                   {formatAmount(inv.amount_with_vat, inv.currency)}
                                </td>
                            </tr>
                        ))}

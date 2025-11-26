@@ -28,7 +28,7 @@ FIELDS TO EXTRACT:
 5. **Amounts & Currency**:
    - **Total Amount (With VAT/DPH)**: Look for "Celkem k úhradě", "Částka celkem", "S DPH", "Total".
    - **Base Amount (Without VAT/DPH)**: Look for "Základ daně", "Bez DPH", "Netto".
-   - **Currency**: Detect the currency (CZK, Kč, EUR, $, etc.).
+   - **Currency**: Detect the currency. **ALWAYS Normalize "Kč" to "CZK".**
 
 FORMATTING RULES:
 - Return amounts as raw numbers (e.g. 1250.50). Do not include currency symbols in the number fields.
@@ -55,7 +55,7 @@ export const extractIcoFromDocument = async (fileData: FileData): Promise<Extrac
       description: { type: Type.STRING, description: "Short description of the service or goods." },
       amountWithVat: { type: Type.NUMBER, description: "Total amount including VAT." },
       amountWithoutVat: { type: Type.NUMBER, description: "Amount excluding VAT (Tax Base)." },
-      currency: { type: Type.STRING, description: "Currency code (e.g., CZK, EUR)." },
+      currency: { type: Type.STRING, description: "Currency code (normalize to CZK if Kč)." },
       confidence: { type: Type.NUMBER, description: "Confidence score between 0 and 1." },
       rawText: { type: Type.STRING, description: "A brief snippet of text where the IČO was found." }
     },

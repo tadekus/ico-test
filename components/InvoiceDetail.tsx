@@ -17,6 +17,12 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // RESET BUTTON STATE when loading a new invoice (e.g. auto-advance)
+  useEffect(() => {
+    setSaveStatus('idle');
+    setErrorMessage(null);
+  }, [invoice.id]);
+
   useEffect(() => {
     if (fileData.extractionResult) {
       setEditedResult(fileData.extractionResult);
@@ -40,6 +46,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
           amount_with_vat: editedResult.amountWithVat || null,
           bank_account: editedResult.bankAccount || null,
           iban: editedResult.iban || null,
+          currency: editedResult.currency || 'CZK', // Default to CZK if missing
           status: 'approved'
       };
 
@@ -147,6 +154,18 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                       onChange={e => handleInputChange('amountWithVat', parseFloat(e.target.value))}
                       className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono text-right bg-slate-50" 
                     />
+                </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-2">
+                <div>
+                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Currency</label>
+                     <input 
+                       type="text" 
+                       value={editedResult.currency || 'CZK'} 
+                       onChange={e => handleInputChange('currency', e.target.value)}
+                       className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono uppercase" 
+                     />
                 </div>
             </div>
 

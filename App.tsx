@@ -36,8 +36,18 @@ function App() {
                 const { data: { session } } = await supabase.auth.getSession();
                 await handleUserSession(session?.user ?? null);
 
-                const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-                    handleUserSession(session?.user ?? null);
+                // Listen specifically for SIGNED_OUT to force clear state
+                const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+                    if (event === 'SIGNED_OUT') {
+                         setUser(null);
+                         setUserProfile(null);
+                         setAssignedProjects([]);
+                         setHasPendingInvite(false);
+                         setCurrentProject(null);
+                         setCurrentProjectRole(null);
+                    } else {
+                        handleUserSession(session?.user ?? null);
+                    }
                 });
                 return () => subscription.unsubscribe();
             } else {
@@ -138,7 +148,15 @@ function App() {
     if (user?.email) { await acceptInvitation(user.email); setHasPendingInvite(false); await signOut(); alert("Setup complete! Please sign in."); }
   };
 
-  const handleSignOut = async () => { await signOut(); setUser(null); setUserProfile(null); setHasPendingInvite(false); };
+  const handleSignOut = async () => { 
+      // Explicitly await sign out and clear state to avoid race conditions
+      await signOut(); 
+      setUser(null); 
+      setUserProfile(null); 
+      setHasPendingInvite(false); 
+      setAssignedProjects([]);
+      setCurrentProject(null);
+  };
 
   // DYNAMIC HEADER LABEL
   let headerRole = 'User';
@@ -237,32 +255,34 @@ function App() {
                     <AdminDashboard profile={userProfile} />
                 )}
 
+                {/* EMPTY STATE for users with no project or unrecognized role */}
                 {activeTab === 'dashboard' && !isAdmin && !isSuperuser && (
                     <div className="text-center py-20 bg-white rounded-xl shadow-sm border border-slate-200">
-                        <div className="inline-flex p-4 bg-indigo-50 rounded-full mb-4">
-                            <svg className="w-8 h-8 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                        </div>
-                        <h2 className="text-2xl font-bold text-slate-800 mb-2">Project Overview</h2>
-                        {currentProject ? (
-                            <div className="max-w-lg mx-auto">
-                                <p className="text-slate-500 mb-6">
-                                    You are viewing <strong>{currentProject.name}</strong> as a <strong>{headerRole}</strong>.
-                                </p>
-                                <div className="bg-slate-50 p-6 rounded-lg text-left space-y-3">
-                                    <div className="flex justify-between"><span className="text-slate-500">Company:</span> <span className="font-medium">{currentProject.company_name || '-'}</span></div>
-                                    <div className="flex justify-between"><span className="text-slate-500">Currency:</span> <span className="font-medium">{currentProject.currency}</span></div>
-                                    <div className="flex justify-between"><span className="text-slate-500">IČO:</span> <span className="font-medium">{currentProject.ico || '-'}</span></div>
+                        {assignedProjects.length === 0 ? (
+                             <>
+                                <div className="inline-flex p-4 bg-amber-50 rounded-full mb-4">
+                                    <svg className="w-8 h-8 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                    </svg>
                                 </div>
-                                {!canInvoice && (
-                                    <p className="mt-6 text-xs text-amber-600 bg-amber-50 p-2 rounded">
-                                        Invoicing module is restricted to Line Producers.
-                                    </p>
-                                )}
-                            </div>
+                                <h2 className="text-2xl font-bold text-slate-800 mb-2">No Projects Assigned</h2>
+                                <p className="text-slate-500 max-w-lg mx-auto">
+                                    You are not currently assigned to any active projects. <br/>
+                                    Please contact your Producer or Superuser for access.
+                                </p>
+                             </>
                         ) : (
-                            <p className="text-slate-500">Please select a project from the top menu.</p>
+                            <>
+                                <div className="inline-flex p-4 bg-indigo-50 rounded-full mb-4">
+                                    <svg className="w-8 h-8 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                                    </svg>
+                                </div>
+                                <h2 className="text-2xl font-bold text-slate-800 mb-2">Select a Project</h2>
+                                <p className="text-slate-500 mb-6">
+                                    Please select a project from the menu above to get started.
+                                </p>
+                            </>
                         )}
                     </div>
                 )}
