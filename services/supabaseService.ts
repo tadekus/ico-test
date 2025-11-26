@@ -185,12 +185,15 @@ export const updateInvoice = async (
     updates: Partial<SavedInvoice>
 ) => {
     if (!supabase) throw new Error("Supabase not configured");
+    
+    // Minimal select to prevent large payload or recursion
     const { data, error } = await supabase
         .from('invoices')
         .update(updates)
         .eq('id', id)
-        .select()
+        .select('id') 
         .single();
+        
     if (error) throw error;
     return data;
 };

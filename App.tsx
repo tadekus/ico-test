@@ -11,6 +11,7 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<Profile | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
+  const [isRedirecting, setIsRedirecting] = useState(false); // New state to prevent flash
   const [hasPendingInvite, setHasPendingInvite] = useState(false);
 
   // PROJECT CONTEXT
@@ -29,17 +30,31 @@ function App() {
   const isSuperuser = (userProfile?.app_role === 'superuser') || (userProfile?.is_superuser === true && !isAdmin);
 
   useEffect(() => {
-    if (configStatus.supabase && supabase) {
-      supabase.auth.getSession().then(({ data: { session } }) => handleUserSession(session?.user ?? null));
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => handleUserSession(session?.user ?? null));
-      return () => subscription.unsubscribe();
-    } else {
-      setIsLoadingSession(false);
-    }
+    const initSession = async () => {
+        try {
+            if (configStatus.supabase && supabase) {
+                const { data: { session } } = await supabase.auth.getSession();
+                await handleUserSession(session?.user ?? null);
+
+                const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+                    handleUserSession(session?.user ?? null);
+                });
+                return () => subscription.unsubscribe();
+            } else {
+                setIsLoadingSession(false);
+            }
+        } catch (err) {
+            console.error("Init Error", err);
+            setIsLoadingSession(false);
+        }
+    };
+    initSession();
   }, []);
 
   useEffect(() => {
-    // Set initial tab based on role and project context
+    // Only update tabs if we are NOT in the middle of a redirect
+    if (isRedirecting) return;
+
     if (isAdmin || isSuperuser) {
       setActiveTab('admin');
     } else if (currentProject && currentProjectRole === 'lineproducer') {
@@ -47,7 +62,7 @@ function App() {
     } else {
       setActiveTab('dashboard');
     }
-  }, [isAdmin, isSuperuser, currentProject, currentProjectRole]);
+  }, [isAdmin, isSuperuser, currentProject, currentProjectRole, isRedirecting]);
 
   const handleUserSession = async (currentUser: User | null) => {
     try {
@@ -75,14 +90,18 @@ function App() {
         const projects = await fetchAssignedProjects(currentUser.id);
         setAssignedProjects(projects);
         
-        // AUTO-REDIRECT: Select first project default if available
-        // This ensures regular users skip the empty "Overview" and go straight to work
-        if (projects.length > 0) {
-            // Pass currentUser explicitly because 'user' state might not be updated yet in this closure
+        // AUTO-REDIRECT LOGIC
+        // If regular user (Line Producer), instantly pick first project and go there.
+        // We set isRedirecting=true to block the main render until we are done.
+        if (projects.length > 0 && profile?.app_role === 'user') {
+            setIsRedirecting(true);
             try {
+              // Pass currentUser explicitly
               await handleProjectChange(projects[0].id.toString(), projects, currentUser);
             } catch (err) {
               console.error("Auto-redirect failed", err);
+            } finally {
+              setIsRedirecting(false);
             }
         } else {
             setCurrentProject(null);
@@ -122,9 +141,7 @@ function App() {
   const handleSignOut = async () => { await signOut(); setUser(null); setUserProfile(null); setHasPendingInvite(false); };
 
   // DYNAMIC HEADER LABEL
-  // Priority: Project Role -> System Role -> Generic User
   let headerRole = 'User';
-  
   if (currentProjectRole) {
       switch(currentProjectRole) {
           case 'lineproducer': headerRole = 'Line Producer'; break;
@@ -139,7 +156,10 @@ function App() {
 
   const canInvoice = currentProjectRole === 'lineproducer';
 
-  if (isLoadingSession) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>;
+  // BLOCK RENDER UNTIL READY
+  // This prevents the "Flash of Overview"
+  if (isLoadingSession || isRedirecting) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>;
+  
   if (hasPendingInvite && user?.email) return <SetupAccount email={user.email} onSuccess={handleSetupSuccess} />;
   if (configStatus.supabase && !user) return <Auth />;
 
@@ -157,7 +177,6 @@ function App() {
                         </div>
                     </div>
 
-                    {/* PROJECT SELECTOR (Visible for everyone except Admins/Superusers who focus on System/Mgmt) */}
                     {!isAdmin && !isSuperuser && (
                         <div className="hidden md:flex items-center gap-2 border-l border-slate-200 pl-6">
                             <label className="text-xs font-bold text-slate-400 uppercase">Project</label>
@@ -190,19 +209,16 @@ function App() {
         {/* MAIN CONTENT */}
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
             
-            {/* TABS - Only show if necessary */}
             {(isAdmin || isSuperuser || (canInvoice && assignedProjects.length > 1)) && (
                 <div className="flex justify-center mb-8">
                     <div className="bg-white/50 backdrop-blur-sm p-1 rounded-xl shadow-sm border border-slate-200 inline-flex">
                         
-                        {/* Only Line Producers can see Invoicing */}
                         {canInvoice && (
                             <button onClick={() => setActiveTab('invoicing')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'invoicing' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                                 Invoicing
                             </button>
                         )}
 
-                        {/* Admin & Superuser Tabs */}
                         {(isAdmin || isSuperuser) && (
                             <button onClick={() => setActiveTab('admin')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'admin' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                                 {isAdmin ? 'System Admin' : 'Projects & Team'}
@@ -212,7 +228,6 @@ function App() {
                 </div>
             )}
 
-            {/* CONTENT AREA */}
             <div className="transition-all duration-300">
                 {activeTab === 'invoicing' && canInvoice && (
                     <InvoicingModule currentProject={currentProject} />
@@ -222,7 +237,6 @@ function App() {
                     <AdminDashboard profile={userProfile} />
                 )}
 
-                {/* Dashboard View for non-Line Producers (Producers, Accountants) */}
                 {activeTab === 'dashboard' && !isAdmin && !isSuperuser && (
                     <div className="text-center py-20 bg-white rounded-xl shadow-sm border border-slate-200">
                         <div className="inline-flex p-4 bg-indigo-50 rounded-full mb-4">

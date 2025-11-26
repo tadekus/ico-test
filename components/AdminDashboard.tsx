@@ -315,144 +315,42 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V23: INVOICE STATUS & STORAGE ===
+-- === REPAIR V24: WRITE LOCK FIX ===
 
--- 1. ADD COLUMNS TO INVOICES
-DO $$ 
-BEGIN
-    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS internal_id integer;
-    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS variable_symbol text;
-    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS description text;
-    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS status text DEFAULT 'draft';
-    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_content text;
-EXCEPTION 
-    WHEN others THEN null;
-END $$;
+-- 1. DROP PROBLEMATIC POLICIES
+DROP POLICY IF EXISTS "Invoices Write" ON invoices;
+DROP POLICY IF EXISTS "Invoices Read" ON invoices;
 
--- 2. DISABLE RLS TEMPORARILY
-ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
-ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
-ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
-ALTER TABLE invoices DISABLE ROW LEVEL SECURITY;
-
--- 3. ENSURE EXTENSIONS & SCHEMAS
-CREATE SCHEMA IF NOT EXISTS extensions;
-CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA extensions;
-
--- 4. RECREATE HELPER FUNCTIONS (SECURITY DEFINER)
-CREATE OR REPLACE FUNCTION public.get_my_role_safe()
-RETURNS text AS $$
-BEGIN
-  RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION public.get_my_role_safe() OWNER TO postgres;
-
-CREATE OR REPLACE FUNCTION public.is_project_owner(pid bigint)
+-- 2. CREATE OPTIMIZED FUNCTIONS
+CREATE OR REPLACE FUNCTION public.can_manage_invoice(inv_proj_id bigint)
 RETURNS boolean AS $$
 BEGIN
-  RETURN EXISTS (SELECT 1 FROM projects WHERE id = pid AND created_by = auth.uid());
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION public.is_project_owner(bigint) OWNER TO postgres;
-
-CREATE OR REPLACE FUNCTION public.is_project_member(pid bigint)
-RETURNS boolean AS $$
-BEGIN
-  RETURN EXISTS (SELECT 1 FROM project_assignments WHERE project_id = pid AND user_id = auth.uid());
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION public.is_project_member(bigint) OWNER TO postgres;
-
--- 5. DELETE TEAM MEMBER RPC
-CREATE OR REPLACE FUNCTION public.delete_team_member(target_user_id uuid)
-RETURNS void AS $$
-DECLARE
-  requesting_user_id uuid;
-BEGIN
-  requesting_user_id := auth.uid();
-  SET search_path = public, auth;
-  IF (public.get_my_role_safe() = 'admin') OR
-     EXISTS (SELECT 1 FROM public.profiles WHERE id = target_user_id AND invited_by = requesting_user_id) THEN
-     DELETE FROM auth.users WHERE id = target_user_id;
-  ELSE
-     RAISE EXCEPTION 'Access Denied: You cannot delete this user.';
-  END IF;
+  -- Simple check: User is member of project OR created the project
+  RETURN EXISTS (
+    SELECT 1 FROM project_assignments WHERE project_id = inv_proj_id AND user_id = auth.uid()
+  ) OR EXISTS (
+    SELECT 1 FROM projects WHERE id = inv_proj_id AND created_by = auth.uid()
+  );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
-ALTER FUNCTION public.delete_team_member(uuid) OWNER TO postgres;
+ALTER FUNCTION public.can_manage_invoice(bigint) OWNER TO postgres;
 
--- 6. CLAIM INVITED ROLE RPC
-CREATE OR REPLACE FUNCTION public.claim_invited_role(p_full_name text)
-RETURNS text AS $$
-DECLARE
-  inv_record record;
-  current_email text;
-BEGIN
-  SET search_path = public, auth;
-  SELECT lower(email) INTO current_email FROM auth.users WHERE id = auth.uid();
-  SELECT * FROM public.user_invitations WHERE lower(email) = current_email AND status = 'pending' LIMIT 1 INTO inv_record;
+-- 3. APPLY NEW POLICIES
+-- Read: Own invoices OR Project member OR Project owner
+CREATE POLICY "Invoices Read" ON invoices FOR SELECT TO authenticated
+USING ( 
+  user_id = auth.uid() OR public.can_manage_invoice(project_id)
+);
 
-  IF inv_record.id IS NOT NULL THEN
-    UPDATE public.profiles SET invited_by = inv_record.invited_by, full_name = p_full_name WHERE id = auth.uid();
-    
-    IF inv_record.target_role IS NULL THEN
-       UPDATE public.profiles SET app_role = 'superuser', is_superuser = true WHERE id = auth.uid();
-       UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
-       RETURN 'Role Claimed: Superuser';
-    ELSE
-       UPDATE public.profiles SET app_role = 'user', is_superuser = false WHERE id = auth.uid();
-       IF inv_record.target_project_id IS NOT NULL THEN
-          INSERT INTO public.project_assignments (project_id, user_id, role)
-          VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role::project_role)
-          ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role;
-       END IF;
-       UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
-       RETURN 'Role Claimed: ' || inv_record.target_role;
-    END IF;
-  ELSE
-    RETURN 'No pending invitation found';
-  END IF;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION public.claim_invited_role(text) OWNER TO postgres;
+-- Write: Own invoices OR Project member (Line Producers typically)
+CREATE POLICY "Invoices Write" ON invoices FOR ALL TO authenticated
+USING ( 
+  user_id = auth.uid() OR public.can_manage_invoice(project_id)
+);
 
--- 7. WIPE & REAPPLY POLICIES
-DO $$ 
-DECLARE pol record;
-BEGIN 
-  FOR pol IN SELECT policyname, tablename FROM pg_policies WHERE tablename IN ('profiles', 'project_assignments', 'user_invitations', 'projects', 'invoices') LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', pol.policyname, pol.tablename);
-  END LOOP;
-END $$;
-
--- Projects
-CREATE POLICY "Projects Read" ON projects FOR SELECT TO authenticated USING ( created_by = auth.uid() OR public.get_my_role_safe() = 'admin' OR public.is_project_member(id) );
-CREATE POLICY "Projects Insert" ON projects FOR INSERT TO authenticated WITH CHECK ( auth.uid() = created_by );
-CREATE POLICY "Projects Manage" ON projects FOR ALL TO authenticated USING ( created_by = auth.uid() OR public.get_my_role_safe() = 'admin' );
-
--- Invoices
-CREATE POLICY "Invoices Read" ON invoices FOR SELECT TO authenticated USING ( user_id = auth.uid() OR public.is_project_owner(project_id) OR public.is_project_member(project_id) );
-CREATE POLICY "Invoices Write" ON invoices FOR ALL TO authenticated USING ( user_id = auth.uid() OR public.is_project_owner(project_id) OR public.is_project_member(project_id) );
-
--- Assignments
-CREATE POLICY "Assignments Read" ON project_assignments FOR SELECT TO authenticated USING ( user_id = auth.uid() OR public.get_my_role_safe() = 'admin' OR public.is_project_owner(project_id) );
-CREATE POLICY "Assignments Manage" ON project_assignments FOR ALL TO authenticated USING ( public.is_project_owner(project_id) );
-
--- Profiles
-CREATE POLICY "Profiles View" ON profiles FOR SELECT TO authenticated USING ( true ); 
-CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated USING ( id = auth.uid() );
-CREATE POLICY "Profiles Admin" ON profiles FOR ALL TO authenticated USING ( public.get_my_role_safe() = 'admin' );
-
--- Invitations
-CREATE POLICY "Invites Read" ON user_invitations FOR SELECT TO authenticated USING ( invited_by = auth.uid() OR lower(email) = lower(auth.jwt() ->> 'email') );
-CREATE POLICY "Invites Manage" ON user_invitations FOR ALL TO authenticated USING ( invited_by = auth.uid() OR public.get_my_role_safe() IN ('admin', 'superuser') );
-
--- 8. ENABLE SECURITY
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
-ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+-- 4. ENSURE INDEXES FOR PERFORMANCE
+CREATE INDEX IF NOT EXISTS idx_invoices_project_id ON invoices(project_id);
+CREATE INDEX IF NOT EXISTS idx_assignments_user_project ON project_assignments(user_id, project_id);
 `;
 
   const pendingSystemInvites = invitations.filter(inv => inv.target_app_role === 'admin' || inv.target_app_role === 'superuser');
