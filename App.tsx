@@ -73,7 +73,8 @@ function App() {
       // AUTO-REDIRECT: Select first project default if available
       // This ensures regular users skip the empty "Overview" and go straight to work
       if (projects.length > 0) {
-          await handleProjectChange(projects[0].id.toString(), projects);
+          // Pass currentUser explicitely because 'user' state might not be updated yet in this closure
+          await handleProjectChange(projects[0].id.toString(), projects, currentUser);
       } else {
           setCurrentProject(null);
           setCurrentProjectRole(null);
@@ -89,12 +90,12 @@ function App() {
     setIsLoadingSession(false);
   };
 
-  const handleProjectChange = async (projectId: string, projectsList = assignedProjects) => {
+  const handleProjectChange = async (projectId: string, projectsList = assignedProjects, targetUser: User | null = user) => {
       const proj = projectsList.find(p => p.id.toString() === projectId) || null;
       setCurrentProject(proj);
       
-      if (proj && user) {
-          const role = await getProjectRole(user.id, proj.id);
+      if (proj && targetUser) {
+          const role = await getProjectRole(targetUser.id, proj.id);
           setCurrentProjectRole(role);
       } else {
           setCurrentProjectRole(null);
