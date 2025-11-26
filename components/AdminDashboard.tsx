@@ -13,7 +13,8 @@ import {
   fetchProjectAssignments,
   addProjectAssignment,
   removeProjectAssignment,
-  fetchAssignmentsForOwner
+  fetchAssignmentsForOwner,
+  adminResetPassword
 } from '../services/supabaseService';
 import { Profile, UserInvitation, Project, ProjectAssignment, ProjectRole, AppRole } from '../types';
 
@@ -67,6 +68,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   const [assignUserRole, setAssignUserRole] = useState<ProjectRole>('lineproducer');
   const [assignUserId, setAssignUserId] = useState<string>('');
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
+
+  // Password Reset Modal
+  const [resetTarget, setResetTarget] = useState<Profile | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [isResetting, setIsResetting] = useState(false);
 
   const isMasterUser = profile.email?.toLowerCase() === 'tadekus@gmail.com';
   const isAdmin = profile.app_role === 'admin' || isMasterUser;
@@ -224,6 +230,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
     } catch(err) { setError("Failed to revoke invitation"); }
   };
 
+  const handlePasswordReset = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!resetTarget || !newPassword) return;
+      if (newPassword.length < 6) {
+          alert("Password must be at least 6 characters.");
+          return;
+      }
+      setIsResetting(true);
+      try {
+          await adminResetPassword(resetTarget.id, newPassword);
+          setSuccessMsg(`Password updated for ${resetTarget.email}`);
+          setResetTarget(null);
+          setNewPassword('');
+      } catch (err: any) {
+          alert("Failed to reset password: " + err.message);
+      } finally {
+          setIsResetting(false);
+      }
+  };
+
   // --- TEAM ASSIGNMENT LOGIC ---
   
   const openTeamManager = async (project: Project) => {
@@ -281,27 +307,35 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V13 (IRONCLAD FIX) ===
+-- === REPAIR V14 (PASSWORD RESET & CLEANUP) ===
 
--- 1. DISABLE SECURITY
+-- 1. DISABLE SECURITY TEMPORARILY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
-ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
-ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
-ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
 
--- 2. DROP EVERYTHING THAT CAUSES CONFLICTS
-DO $$ 
-DECLARE 
-  pol record;
-BEGIN 
-  FOR pol IN SELECT policyname, tablename FROM pg_policies WHERE tablename IN ('profiles', 'project_assignments', 'user_invitations', 'projects', 'budgets') LOOP
-    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', pol.policyname, pol.tablename);
-  END LOOP;
-END $$;
+-- 2. ENABLE CRYPTO (Required for password hashing)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- 3. ADMIN PASSWORD RESET FUNCTION
+CREATE OR REPLACE FUNCTION admin_reset_user_password(target_user_id uuid, new_password text)
+RETURNS void AS $$
+BEGIN
+  -- Strict Admin Check
+  IF lower(auth.jwt() ->> 'email') <> 'tadekus@gmail.com' THEN
+    RAISE EXCEPTION 'Access Denied: Only Master Admin can reset passwords.';
+  END IF;
+
+  UPDATE auth.users
+  SET encrypted_password = crypt(new_password, gen_salt('bf')),
+      updated_at = now()
+  WHERE id = target_user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth;
+ALTER FUNCTION admin_reset_user_password(uuid, text) OWNER TO postgres;
+
+-- 4. CLEANUP FUNCTIONS
 DROP FUNCTION IF EXISTS public.claim_invited_role() CASCADE;
 
--- 3. CREATE SAFE FUNCTIONS
+-- 5. SAFE HELPER FUNCTIONS
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
 BEGIN
@@ -330,7 +364,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.check_email_exists_global(text) OWNER TO postgres;
 
--- 4. IMPROVED CLAIM ROLE FUNCTION
+-- 6. IMPROVED CLAIM ROLE FUNCTION
 CREATE OR REPLACE FUNCTION public.claim_invited_role()
 RETURNS text AS $$
 DECLARE
@@ -340,23 +374,17 @@ BEGIN
   SET search_path = public, auth;
   SELECT lower(email) INTO current_email FROM auth.users WHERE id = auth.uid();
   
-  -- Find Pending Invitation
   SELECT * FROM public.user_invitations 
   WHERE lower(email) = current_email AND status = 'pending'
   LIMIT 1 INTO inv_record;
 
   IF inv_record.id IS NOT NULL THEN
-    -- Link Inviter
     UPDATE public.profiles SET invited_by = inv_record.invited_by WHERE id = auth.uid();
     
     IF inv_record.target_role IS NULL THEN
-       -- SYSTEM INVITE (Admin/Superuser)
        UPDATE public.profiles SET app_role = 'superuser', is_superuser = true WHERE id = auth.uid();
     ELSE
-       -- TEAM INVITE (User)
        UPDATE public.profiles SET app_role = 'user', is_superuser = false WHERE id = auth.uid();
-       
-       -- Assign Project
        IF inv_record.target_project_id IS NOT NULL THEN
           INSERT INTO public.project_assignments (project_id, user_id, role)
           VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role);
@@ -364,7 +392,7 @@ BEGIN
     END IF;
 
     UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
-    RETURN 'Role Claimed. Role: ' || coalesce(inv_record.target_role, 'Superuser') || ', ProjectID: ' || coalesce(inv_record.target_project_id::text, 'None');
+    RETURN 'Role Claimed: ' || coalesce(inv_record.target_role, 'Superuser');
   ELSE
     RETURN 'No pending invitation found';
   END IF;
@@ -372,26 +400,24 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.claim_invited_role() OWNER TO postgres;
 
+-- 7. CLEAN POLICIES
+DO $$ 
+DECLARE 
+  pol record;
+BEGIN 
+  FOR pol IN SELECT policyname, tablename FROM pg_policies WHERE tablename IN ('profiles', 'project_assignments', 'user_invitations', 'projects', 'budgets') LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', pol.policyname, pol.tablename);
+  END LOOP;
+END $$;
 
--- 5. NEW POLICIES
+-- 8. NEW POLICIES
 
--- === PROJECTS ===
-CREATE POLICY "Projects Read" ON projects FOR SELECT TO authenticated
-USING (
-    created_by = auth.uid()
-    OR lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    OR public.get_my_role_safe() = 'admin'
-    OR id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid())
-);
+-- Projects
+CREATE POLICY "Projects Read" ON projects FOR SELECT TO authenticated USING ( created_by = auth.uid() OR lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_role_safe() = 'admin' OR id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid()) );
+CREATE POLICY "Projects Insert" ON projects FOR INSERT TO authenticated WITH CHECK ( created_by = auth.uid() );
+CREATE POLICY "Projects Update/Delete" ON projects FOR ALL TO authenticated USING ( created_by = auth.uid() OR lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' );
 
--- EXPLICIT INSERT POLICY for Creator
-CREATE POLICY "Projects Insert" ON projects FOR INSERT TO authenticated
-WITH CHECK ( created_by = auth.uid() );
-
-CREATE POLICY "Projects Update/Delete" ON projects FOR ALL TO authenticated
-USING ( created_by = auth.uid() OR lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' );
-
--- === PROFILES ===
+-- Profiles
 CREATE POLICY "Profiles Read Self" ON profiles FOR SELECT TO authenticated USING ( id = auth.uid() );
 CREATE POLICY "Profiles Read Admin" ON profiles FOR SELECT TO authenticated USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_role_safe() = 'admin');
 CREATE POLICY "Profiles Read Invitees" ON profiles FOR SELECT TO authenticated USING ( invited_by = auth.uid() );
@@ -399,23 +425,23 @@ CREATE POLICY "Profiles Read Team" ON profiles FOR SELECT TO authenticated USING
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated USING ( id = auth.uid() ) WITH CHECK ( id = auth.uid() );
 CREATE POLICY "Profiles Update Admin" ON profiles FOR UPDATE TO authenticated USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_role_safe() = 'admin' );
 
--- === ASSIGNMENTS ===
+-- Assignments
 CREATE POLICY "Assignments Read" ON project_assignments FOR SELECT TO authenticated USING ( user_id = auth.uid() OR public.get_my_role_safe() = 'admin' );
 CREATE POLICY "Assignments Read Owner" ON project_assignments FOR SELECT TO authenticated USING ( EXISTS (SELECT 1 FROM projects WHERE id = project_assignments.project_id AND created_by = auth.uid()) );
 CREATE POLICY "Assignments Insert Owner" ON project_assignments FOR INSERT TO authenticated WITH CHECK ( EXISTS (SELECT 1 FROM projects WHERE id = project_assignments.project_id AND created_by = auth.uid()) );
 CREATE POLICY "Assignments Delete Owner" ON project_assignments FOR DELETE TO authenticated USING ( EXISTS (SELECT 1 FROM projects WHERE id = project_assignments.project_id AND created_by = auth.uid()) );
 
--- === INVITATIONS ===
+-- Invitations
 CREATE POLICY "Invitations Read" ON user_invitations FOR SELECT TO authenticated USING ( invited_by = auth.uid() OR lower(email) = lower(auth.jwt() ->> 'email') OR public.get_my_role_safe() = 'admin' );
 CREATE POLICY "Invitations Write" ON user_invitations FOR ALL TO authenticated USING ( invited_by = auth.uid() OR public.get_my_role_safe() IN ('admin', 'superuser') );
 
--- 6. RE-ENABLE SECURITY
+-- 9. RE-ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_invitations ENABLE ROW LEVEL SECURITY;
 
--- 7. OVERRIDE
+-- 10. OVERRIDE
 UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com';
 `;
 
@@ -482,7 +508,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
       {/* === SYSTEM TAB (ADMIN ONLY) === */}
       {isAdmin && activeTab === 'system' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Invite Form - System Roles Only */}
+            {/* Invite Form */}
             <div className="lg:col-span-1 bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-fit">
                 <h3 className="font-bold text-slate-800 mb-4">Invite System User</h3>
                 <p className="text-xs text-slate-500 mb-4">
@@ -541,7 +567,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                            {/* PENDING INVITATIONS SECTION */}
+                            {/* PENDING INVITATIONS */}
                             {pendingSystemInvites.map(inv => (
                                 <tr key={`inv-${inv.id}`} className="bg-amber-50/50 hover:bg-amber-50">
                                     <td className="px-6 py-4">
@@ -568,7 +594,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                                 </tr>
                             ))}
 
-                            {/* ACTIVE PROFILES SECTION */}
+                            {/* ACTIVE PROFILES */}
                             {profiles
                               .filter(p => p.app_role === 'admin' || p.app_role === 'superuser')
                               .map(p => (
@@ -586,22 +612,27 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                                             ? <span className="text-red-500 font-medium">Suspended</span>
                                             : <span className="text-emerald-600 font-medium">Active</span>}
                                     </td>
-                                    <td className="px-6 py-4 text-right">
+                                    <td className="px-6 py-4 text-right flex items-center justify-end gap-3">
                                         {p.id !== profile.id && (
-                                            <button onClick={() => handleToggleDisabled(p)} 
-                                                className={`text-xs font-medium hover:underline ${p.is_disabled ? 'text-emerald-600' : 'text-red-500'}`}>
-                                                {p.is_disabled ? 'Activate' : 'Suspend'}
-                                            </button>
+                                            <>
+                                                <button 
+                                                    onClick={() => setResetTarget(p)}
+                                                    className="text-slate-400 hover:text-indigo-600"
+                                                    title="Reset Password"
+                                                >
+                                                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                                    </svg>
+                                                </button>
+                                                <button onClick={() => handleToggleDisabled(p)} 
+                                                    className={`text-xs font-medium hover:underline ${p.is_disabled ? 'text-emerald-600' : 'text-red-500'}`}>
+                                                    {p.is_disabled ? 'Activate' : 'Suspend'}
+                                                </button>
+                                            </>
                                         )}
                                     </td>
                                 </tr>
                             ))}
-                            
-                            {profiles.filter(p => p.app_role === 'admin' || p.app_role === 'superuser').length === 0 && pendingSystemInvites.length === 0 && (
-                                <tr>
-                                    <td colSpan={4} className="px-6 py-8 text-center text-slate-400 italic">No other system users found.</td>
-                                </tr>
-                            )}
                         </tbody>
                     </table>
                 </div>
@@ -689,7 +720,6 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                           </div>
                           <div className="text-xs text-slate-400 border-t border-slate-100 pt-3 flex items-center gap-4">
                               <span>{proj.budgets?.length || 0} budget versions</span>
-                              {/* Future: Add assignment count */}
                           </div>
                       </div>
                   ))}
@@ -775,7 +805,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                        <table className="w-full text-sm text-left">
                            <tbody className="divide-y divide-slate-100">
                                {profiles
-                                 .filter(p => p.invited_by === profile.id) // STRICTLY show only my invitees
+                                 .filter(p => p.invited_by === profile.id)
                                  .map(p => (
                                    <tr key={p.id} className="hover:bg-slate-50">
                                        <td className="px-6 py-3">
@@ -901,6 +931,37 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                   </div>
               </div>
           </div>
+      )}
+
+      {/* === PASSWORD RESET MODAL === */}
+      {resetTarget && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden p-6">
+                <h3 className="text-lg font-bold text-slate-800 mb-2">Reset Password</h3>
+                <p className="text-sm text-slate-500 mb-4">
+                    Enter a new password for <strong>{resetTarget.email}</strong>.
+                </p>
+                <form onSubmit={handlePasswordReset}>
+                    <input 
+                        type="text" 
+                        value={newPassword}
+                        onChange={e => setNewPassword(e.target.value)}
+                        placeholder="New Password"
+                        className="w-full px-3 py-2 border rounded text-sm mb-4"
+                        required
+                        minLength={6}
+                    />
+                    <div className="flex justify-end gap-2">
+                        <button type="button" onClick={() => { setResetTarget(null); setNewPassword(''); }} className="px-4 py-2 text-slate-600 text-sm hover:bg-slate-100 rounded">
+                            Cancel
+                        </button>
+                        <button type="submit" disabled={isResetting} className="px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
+                            {isResetting ? 'Saving...' : 'Set Password'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
       )}
 
     </div>

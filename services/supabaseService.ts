@@ -91,6 +91,17 @@ export const getUserProfile = async (userId: string): Promise<Profile | null> =>
   return data as Profile;
 };
 
+export const adminResetPassword = async (userId: string, newPassword: string) => {
+  if (!supabase) throw new Error("Supabase not configured");
+  
+  const { error } = await supabase.rpc('admin_reset_user_password', {
+    target_user_id: userId,
+    new_password: newPassword
+  });
+
+  if (error) throw new Error(`Failed to reset password: ${error.message}`);
+};
+
 // --- DATABASE OPERATIONS: INVOICES ---
 
 export const saveExtractionResult = async (result: ExtractionResult, projectId?: number) => {
