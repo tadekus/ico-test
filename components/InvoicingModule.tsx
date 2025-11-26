@@ -67,15 +67,32 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
     }
   };
 
-  const handleInvoiceUpdated = async (invoiceId: number) => {
-    setViewingInvoiceId(null);
+  const handleInvoiceUpdated = async (invoiceId: number, nextInvoiceId?: number | null) => {
     if (currentProject) {
+        // Refresh data in background
         const updatedInvoices = await fetchInvoices(currentProject.id);
         setSavedInvoices(updatedInvoices);
+    }
+    
+    // Navigation Logic: If next ID provided (Auto-advance), go there. Otherwise close.
+    if (nextInvoiceId) {
+        setViewingInvoiceId(nextInvoiceId);
+    } else {
+        setViewingInvoiceId(null);
     }
   };
 
   const activeInvoice = savedInvoices.find(inv => inv.id === viewingInvoiceId);
+  
+  // Find the NEXT draft invoice for the "Approve & Next" workflow
+  // We sort by ID or Internal ID to ensure consistent order
+  const draftInvoices = savedInvoices.filter(inv => inv.status === 'draft' && inv.id !== viewingInvoiceId);
+  // Sort drafts so we pick the "next" one in the list (usually newest or oldest depending on workflow, sticking to default sort)
+  // Assuming savedInvoices comes sorted by internal_id desc (newest first). 
+  // If user wants to clear backlog, maybe oldest draft first? 
+  // Let's stick to the current list order which is internal_id DESC.
+  const nextDraftId = draftInvoices.length > 0 ? draftInvoices[0].id : null;
+
   // Map SavedInvoice to FileData structure for InvoiceDetail
   const mappedFileData: FileData | null = activeInvoice ? {
       id: activeInvoice.id.toString(),
@@ -104,9 +121,10 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
           <InvoiceDetail 
              invoice={activeInvoice}
              fileData={mappedFileData}
-             project={currentProject} 
+             project={currentProject}
+             nextDraftId={nextDraftId}
              onBack={() => setViewingInvoiceId(null)}
-             onSaved={() => handleInvoiceUpdated(viewingInvoiceId)}
+             onSaved={(nextId) => handleInvoiceUpdated(viewingInvoiceId, nextId)}
           />
       );
   }

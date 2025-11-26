@@ -39,7 +39,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // Set initial tab based on role
+    // Set initial tab based on role and project context
     if (isAdmin || isSuperuser) {
       setActiveTab('admin');
     } else if (currentProject && currentProjectRole === 'lineproducer') {
@@ -70,7 +70,8 @@ function App() {
       const projects = await fetchAssignedProjects(currentUser.id);
       setAssignedProjects(projects);
       
-      // Select first project default if available
+      // AUTO-REDIRECT: Select first project default if available
+      // This ensures regular users skip the empty "Overview" and go straight to work
       if (projects.length > 0) {
           await handleProjectChange(projects[0].id.toString(), projects);
       } else {
@@ -107,15 +108,19 @@ function App() {
   const handleSignOut = async () => { await signOut(); setUser(null); setUserProfile(null); setHasPendingInvite(false); };
 
   // DYNAMIC HEADER LABEL
+  // Priority: Project Role -> System Role -> Generic User
   let headerRole = 'User';
-  if (isAdmin) headerRole = 'Administrator';
-  else if (isSuperuser) headerRole = 'Superuser';
-  else if (currentProjectRole) {
+  
+  if (currentProjectRole) {
       switch(currentProjectRole) {
           case 'lineproducer': headerRole = 'Line Producer'; break;
           case 'producer': headerRole = 'Producer'; break;
           case 'accountant': headerRole = 'Accountant'; break;
       }
+  } else if (isAdmin) {
+      headerRole = 'Administrator';
+  } else if (isSuperuser) {
+      headerRole = 'Superuser';
   }
 
   const canInvoice = currentProjectRole === 'lineproducer';
@@ -132,7 +137,10 @@ function App() {
                 <div className="flex items-center gap-8">
                     <div className="flex items-center gap-2">
                         <div className="bg-indigo-600 rounded p-1.5"><svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></div>
-                        <span className="font-bold text-slate-800 text-lg tracking-tight">MovieAcct</span>
+                        <div>
+                            <span className="font-bold text-slate-800 text-lg tracking-tight block leading-none">RASPLE2</span>
+                            <span className="text-[10px] text-slate-400 font-medium tracking-wide">powered by Ministerstvo Kouzel</span>
+                        </div>
                     </div>
 
                     {/* PROJECT SELECTOR (Visible for everyone except Admins/Superusers who focus on System/Mgmt) */}
@@ -168,25 +176,27 @@ function App() {
         {/* MAIN CONTENT */}
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
             
-            {/* TABS */}
-            <div className="flex justify-center mb-8">
-                <div className="bg-white/50 backdrop-blur-sm p-1 rounded-xl shadow-sm border border-slate-200 inline-flex">
-                    
-                    {/* Only Line Producers can see Invoicing */}
-                    {canInvoice && (
-                        <button onClick={() => setActiveTab('invoicing')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'invoicing' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                            Invoicing
-                        </button>
-                    )}
+            {/* TABS - Only show if necessary */}
+            {(isAdmin || isSuperuser || (canInvoice && assignedProjects.length > 1)) && (
+                <div className="flex justify-center mb-8">
+                    <div className="bg-white/50 backdrop-blur-sm p-1 rounded-xl shadow-sm border border-slate-200 inline-flex">
+                        
+                        {/* Only Line Producers can see Invoicing */}
+                        {canInvoice && (
+                            <button onClick={() => setActiveTab('invoicing')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'invoicing' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                Invoicing
+                            </button>
+                        )}
 
-                    {/* Admin & Superuser Tabs */}
-                    {(isAdmin || isSuperuser) && (
-                        <button onClick={() => setActiveTab('admin')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'admin' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                            {isAdmin ? 'System Admin' : 'Projects & Team'}
-                        </button>
-                    )}
+                        {/* Admin & Superuser Tabs */}
+                        {(isAdmin || isSuperuser) && (
+                            <button onClick={() => setActiveTab('admin')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'admin' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                {isAdmin ? 'System Admin' : 'Projects & Team'}
+                            </button>
+                        )}
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* CONTENT AREA */}
             <div className="transition-all duration-300">

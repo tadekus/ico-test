@@ -7,11 +7,12 @@ interface InvoiceDetailProps {
   invoice: SavedInvoice;
   fileData: FileData;
   project: Project | null;
+  nextDraftId: number | null; // ID of the next draft invoice to load immediately
   onBack: () => void;
-  onSaved: () => void;
+  onSaved: (nextId?: number | null) => void;
 }
 
-const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, project, onBack, onSaved }) => {
+const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, project, nextDraftId, onBack, onSaved }) => {
   const [editedResult, setEditedResult] = useState<ExtractionResult | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -45,7 +46,14 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
       await updateInvoice(invoice.id, updates);
       
       setSaveStatus('success');
-      setTimeout(() => onSaved(), 1000);
+      setTimeout(() => {
+          // If there is a next draft invoice, we signal the parent to load it immediately
+          if (nextDraftId) {
+             onSaved(nextDraftId);
+          } else {
+             onSaved(null); // Return to list if no more drafts
+          }
+      }, 500);
     } catch (err: any) {
       setSaveStatus('error');
       setErrorMessage(err.message || "Failed to save");
@@ -55,6 +63,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const handleInputChange = (field: keyof ExtractionResult, value: string | number) => {
     setEditedResult(prev => prev ? ({ ...prev, [field]: value }) : null);
   };
+
+  const isReapproving = invoice.status === 'approved';
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-140px)]">
@@ -169,8 +179,13 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                  disabled:opacity-75 disabled:cursor-not-allowed
                `}
             >
-                {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved' : 'Approve Invoice'}
+                {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved' : (isReapproving ? 'Re-approve Invoice' : 'Approve Invoice')}
             </button>
+            {nextDraftId && saveStatus !== 'success' && (
+                <div className="text-center text-[10px] text-slate-400 mt-2">
+                    Next invoice will load automatically
+                </div>
+            )}
         </div>
       </div>
 
@@ -186,7 +201,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
            )}
            {fileData.type === 'pdf' && (
                <iframe 
-                 src={(fileData.preview || (fileData.base64 ? `data:application/pdf;base64,${fileData.base64}` : '')) + '#toolbar=0&navpanes=0&scrollbar=0'} 
+                 src={(fileData.preview || (fileData.base64 ? `data:application/pdf;base64,${fileData.base64}` : '')) + '#toolbar=0&navpanes=0&scrollbar=0&zoom=80'} 
                  className="w-full h-full shadow-lg bg-white" 
                  title="PDF Preview"
                />
