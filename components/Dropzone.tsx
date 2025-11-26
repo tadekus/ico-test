@@ -2,7 +2,6 @@
 import React, { useCallback, useState } from 'react';
 import { FileData } from '../types';
 import { readFile } from '../utils/fileUtils';
-import { v4 as uuidv4 } from 'uuid'; // Simple UUID generator or custom function needed
 
 interface DropzoneProps {
   onFileLoaded: (data: FileData[]) => void;
