@@ -263,22 +263,34 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V10 (Idempotent Policies) ===
+-- === REPAIR V11 (CLEAN SLATE) ===
 
--- 1. DISABLE SECURITY
+-- 1. DISABLE SECURITY TEMPORARILY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
+ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
 
--- 2. DROP EVERYTHING CASCADE (Clean Slate)
+-- 2. NUCLEAR OPTION: Drop ALL policies on relevant tables to guarantee no recursion remnants
+DO $$ 
+DECLARE 
+  pol record;
+BEGIN 
+  FOR pol IN SELECT policyname, tablename FROM pg_policies WHERE tablename IN ('profiles', 'project_assignments', 'user_invitations', 'projects', 'budgets') LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', pol.policyname, pol.tablename);
+  END LOOP;
+END $$;
+
+-- 3. DROP FUNCTIONS CASCADE
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 DROP FUNCTION IF EXISTS public.get_my_team_mates_ids() CASCADE;
 DROP FUNCTION IF EXISTS public.is_team_member(uuid) CASCADE;
 
--- 3. CREATE GOD-MODE FUNCTIONS
+-- 4. CREATE GOD-MODE FUNCTIONS
 -- CRITICAL: We explicitly set OWNER TO postgres to ensure RLS bypass works.
 
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
 BEGIN
+  -- Returns role of current user, bypassing RLS
   RETURN (SELECT app_role FROM public.profiles WHERE id = auth.uid());
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
@@ -287,6 +299,7 @@ ALTER FUNCTION public.get_my_role_safe() OWNER TO postgres;
 CREATE OR REPLACE FUNCTION public.get_my_team_mates_ids()
 RETURNS TABLE (uid uuid) AS $$
 BEGIN
+  -- Returns IDs of users in same projects, bypassing RLS
   RETURN QUERY 
   SELECT user_id FROM project_assignments 
   WHERE project_id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid());
@@ -294,42 +307,34 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.get_my_team_mates_ids() OWNER TO postgres;
 
--- 4. CREATE POLICIES (Split into Atomic Rules)
+-- 5. CREATE FRESH POLICIES (No Recursion)
 
--- PROFILES
--- A. Read Self
-DROP POLICY IF EXISTS "Profiles Read Self" ON profiles;
+-- === PROFILES ===
+-- Read: I can see myself
 CREATE POLICY "Profiles Read Self" ON profiles FOR SELECT TO authenticated
 USING ( id = auth.uid() );
 
--- B. Read as Admin (Using Safe Function)
-DROP POLICY IF EXISTS "Profiles Read Admin" ON profiles;
+-- Read: Admin can see Everyone (Uses Safe Function)
 CREATE POLICY "Profiles Read Admin" ON profiles FOR SELECT TO authenticated
 USING ( 
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
     OR public.get_my_role_safe() IN ('admin', 'superuser')
 );
 
--- C. Read Invitees
-DROP POLICY IF EXISTS "Profiles Read Invitees" ON profiles;
+-- Read: I can see people I invited
 CREATE POLICY "Profiles Read Invitees" ON profiles FOR SELECT TO authenticated
 USING ( invited_by = auth.uid() );
 
--- D. Read Team (Using Safe Function)
-DROP POLICY IF EXISTS "Profiles Read Team" ON profiles;
+-- Read: I can see my team mates (Uses Safe Function)
 CREATE POLICY "Profiles Read Team" ON profiles FOR SELECT TO authenticated
 USING ( id IN (SELECT uid FROM public.get_my_team_mates_ids()) );
 
-
--- UPDATE POLICIES
--- A. Update Self (CRITICAL for Account Setup)
-DROP POLICY IF EXISTS "Profiles Update Self" ON profiles;
+-- Update: I can update MYSELF (Essential for Setup)
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated
 USING ( id = auth.uid() )
 WITH CHECK ( id = auth.uid() );
 
--- B. Admin Update
-DROP POLICY IF EXISTS "Profiles Update Admin" ON profiles;
+-- Update: Admin can update anyone
 CREATE POLICY "Profiles Update Admin" ON profiles FOR UPDATE TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
@@ -337,26 +342,39 @@ USING (
 );
 
 
--- PROJECT ASSIGNMENTS (Dumb Policies for Safety)
-DROP POLICY IF EXISTS "Assignments Read" ON project_assignments;
+-- === PROJECT ASSIGNMENTS ===
 CREATE POLICY "Assignments Read" ON project_assignments FOR SELECT TO authenticated
 USING (
     user_id = auth.uid()
     OR public.get_my_role_safe() IN ('admin', 'superuser')
 );
 
-DROP POLICY IF EXISTS "Assignments Write" ON project_assignments;
 CREATE POLICY "Assignments Write" ON project_assignments FOR ALL TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
     OR public.get_my_role_safe() IN ('admin', 'superuser')
 );
 
--- 5. RE-ENABLE SECURITY
+-- === INVITATIONS ===
+CREATE POLICY "Invitations Read" ON user_invitations FOR SELECT TO authenticated
+USING (
+    invited_by = auth.uid()
+    OR lower(email) = lower(auth.jwt() ->> 'email')
+    OR public.get_my_role_safe() = 'admin'
+);
+
+CREATE POLICY "Invitations Write" ON user_invitations FOR ALL TO authenticated
+USING (
+    invited_by = auth.uid()
+    OR public.get_my_role_safe() IN ('admin', 'superuser')
+);
+
+
+-- 6. RE-ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
 
--- 6. SYSTEM OVERRIDE
+-- 7. SYSTEM OVERRIDE
 UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com';
 `;
 
