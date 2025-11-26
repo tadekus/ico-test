@@ -343,7 +343,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V20 (ROLE CAST FIX) ===
+-- === REPAIR V21 (FINAL STABILIZATION) ===
 
 -- 1. DISABLE SECURITY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
@@ -393,13 +393,15 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.is_project_member(bigint) OWNER TO postgres;
 
--- Password Reset
+-- Password Reset (ROLE BASED)
 CREATE OR REPLACE FUNCTION admin_reset_user_password(target_user_id uuid, new_password text)
 RETURNS void AS $$
 BEGIN
-  IF lower(auth.jwt() ->> 'email') <> 'tadekus@gmail.com' THEN
-    RAISE EXCEPTION 'Access Denied';
+  -- Strict Check: Must be Admin
+  IF public.get_my_role_safe() <> 'admin' THEN
+    RAISE EXCEPTION 'Access Denied: Admins only.';
   END IF;
+
   UPDATE auth.users
   SET encrypted_password = extensions.crypt(new_password, extensions.gen_salt('bf')),
       updated_at = now()
@@ -417,8 +419,8 @@ BEGIN
   requesting_user_id := auth.uid();
   SET search_path = public, auth;
 
-  -- Permission Check: Master Admin OR Inviter
-  IF (lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com') OR
+  -- Permission Check: Admin OR Inviter
+  IF (public.get_my_role_safe() = 'admin') OR
      EXISTS (SELECT 1 FROM public.profiles WHERE id = target_user_id AND invited_by = requesting_user_id) THEN
 
      -- Delete from AUTH (cascades to public tables)
@@ -510,13 +512,13 @@ END $$;
 
 -- Projects
 CREATE POLICY "Projects Read" ON projects FOR SELECT TO authenticated 
-USING ( created_by = auth.uid() OR lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_role_safe() = 'admin' OR public.is_project_member(id) );
+USING ( created_by = auth.uid() OR public.get_my_role_safe() = 'admin' OR public.is_project_member(id) );
 
 CREATE POLICY "Projects Insert" ON projects FOR INSERT TO authenticated 
 WITH CHECK ( auth.uid() = created_by );
 
 CREATE POLICY "Projects Update/Delete" ON projects FOR ALL TO authenticated 
-USING ( created_by = auth.uid() OR lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' );
+USING ( created_by = auth.uid() OR public.get_my_role_safe() = 'admin' );
 
 -- Assignments
 CREATE POLICY "Assignments Read" ON project_assignments FOR SELECT TO authenticated 
@@ -528,13 +530,13 @@ WITH CHECK ( public.is_project_owner(project_id) );
 
 -- Profiles
 CREATE POLICY "Profiles Read Self" ON profiles FOR SELECT TO authenticated USING ( id = auth.uid() );
-CREATE POLICY "Profiles Read Admin" ON profiles FOR SELECT TO authenticated USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_role_safe() = 'admin');
+CREATE POLICY "Profiles Read Admin" ON profiles FOR SELECT TO authenticated USING ( public.get_my_role_safe() = 'admin');
 CREATE POLICY "Profiles Read Invitees" ON profiles FOR SELECT TO authenticated USING ( invited_by = auth.uid() );
 CREATE POLICY "Profiles Read Team" ON profiles FOR SELECT TO authenticated 
 USING ( id IN (SELECT user_id FROM project_assignments WHERE project_id IN (SELECT id FROM projects WHERE created_by = auth.uid())) );
 
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated USING ( id = auth.uid() ) WITH CHECK ( id = auth.uid() );
-CREATE POLICY "Profiles Update Admin" ON profiles FOR UPDATE TO authenticated USING ( lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' OR public.get_my_role_safe() = 'admin' );
+CREATE POLICY "Profiles Update Admin" ON profiles FOR UPDATE TO authenticated USING ( public.get_my_role_safe() = 'admin' );
 CREATE POLICY "Profiles Delete Invitees" ON profiles FOR DELETE TO authenticated USING ( invited_by = auth.uid() );
 
 -- Invitations
