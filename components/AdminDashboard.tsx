@@ -307,15 +307,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V14 (PASSWORD RESET & CLEANUP) ===
+-- === REPAIR V15 (FIX PGCRYPTO SCHEMA) ===
 
 -- 1. DISABLE SECURITY TEMPORARILY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 
--- 2. ENABLE CRYPTO (Required for password hashing)
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- 2. ENABLE CRYPTO IN EXTENSIONS SCHEMA
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA extensions;
 
--- 3. ADMIN PASSWORD RESET FUNCTION
+-- 3. ADMIN PASSWORD RESET FUNCTION (Fix search_path)
 CREATE OR REPLACE FUNCTION admin_reset_user_password(target_user_id uuid, new_password text)
 RETURNS void AS $$
 BEGIN
@@ -329,7 +330,7 @@ BEGIN
       updated_at = now()
   WHERE id = target_user_id;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth, extensions;
 ALTER FUNCTION admin_reset_user_password(uuid, text) OWNER TO postgres;
 
 -- 4. CLEANUP FUNCTIONS
