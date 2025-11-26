@@ -12,7 +12,8 @@ import {
   uploadBudget,
   fetchProjectAssignments,
   addProjectAssignment,
-  removeProjectAssignment
+  removeProjectAssignment,
+  fetchAssignmentsForOwner
 } from '../services/supabaseService';
 import { Profile, UserInvitation, Project, ProjectAssignment, ProjectRole, AppRole } from '../types';
 
@@ -25,6 +26,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [invitations, setInvitations] = useState<UserInvitation[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [allOwnerAssignments, setAllOwnerAssignments] = useState<any[]>([]);
 
   // UI State
   const [loading, setLoading] = useState(true);
@@ -98,6 +100,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
       setProjects(projs);
       setInvitations(invites);
       setProfiles(profs);
+
+      // Load all assignments for this user's projects (to display specific roles in list)
+      if (isSuperuser && profile.id) {
+        const assigns = await fetchAssignmentsForOwner(profile.id);
+        setAllOwnerAssignments(assigns);
+      }
 
     } catch (err: any) {
       console.error(err);
@@ -262,12 +270,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
       }
   };
 
+  // Helper to get formatted role string for team list
+  const getUserRolesText = (userId: string) => {
+    const userAssigns = allOwnerAssignments.filter(a => a.user_id === userId);
+    if (userAssigns.length === 0) return "Unassigned";
+    if (userAssigns.length === 1) {
+        return `${userAssigns[0].role} (${userAssigns[0].project?.name})`;
+    }
+    return `${userAssigns.length} Active Roles`;
+  };
+
   const getMigrationSql = () => `
--- === REPAIR V11 (CLEAN SLATE) ===
+-- === REPAIR V12 (STRICT VISIBILITY & PROJECT PERMS) ===
 
 -- 1. DISABLE SECURITY TEMPORARILY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
 
 -- 2. NUCLEAR OPTION: Drop ALL policies on relevant tables to guarantee no recursion remnants
 DO $$ 
@@ -283,6 +302,7 @@ END $$;
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 DROP FUNCTION IF EXISTS public.get_my_team_mates_ids() CASCADE;
 DROP FUNCTION IF EXISTS public.is_team_member(uuid) CASCADE;
+DROP FUNCTION IF EXISTS public.check_email_exists_global(text) CASCADE;
 
 -- 4. CREATE GOD-MODE FUNCTIONS
 -- CRITICAL: We explicitly set OWNER TO postgres to ensure RLS bypass works.
@@ -307,7 +327,39 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.get_my_team_mates_ids() OWNER TO postgres;
 
+CREATE OR REPLACE FUNCTION public.check_email_exists_global(target_email text)
+RETURNS boolean AS $$
+BEGIN
+  -- Checks if email exists in auth or pending invites (Bypassing RLS)
+  IF EXISTS (SELECT 1 FROM auth.users WHERE lower(email) = lower(target_email)) THEN
+    RETURN true;
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.user_invitations WHERE lower(email) = lower(target_email) AND status = 'pending') THEN
+    RETURN true;
+  END IF;
+  RETURN false;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+ALTER FUNCTION public.check_email_exists_global(text) OWNER TO postgres;
+
+
 -- 5. CREATE FRESH POLICIES (No Recursion)
+
+-- === PROJECTS ===
+CREATE POLICY "Projects Read" ON projects FOR SELECT TO authenticated
+USING (
+    created_by = auth.uid()
+    OR lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
+    OR public.get_my_role_safe() = 'admin'
+    OR id IN (SELECT project_id FROM project_assignments WHERE user_id = auth.uid())
+);
+
+CREATE POLICY "Projects Insert" ON projects FOR INSERT TO authenticated
+WITH CHECK ( created_by = auth.uid() );
+
+CREATE POLICY "Projects Update/Delete" ON projects FOR ALL TO authenticated
+USING ( created_by = auth.uid() OR lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' );
+
 
 -- === PROFILES ===
 -- Read: I can see myself
@@ -318,10 +370,10 @@ USING ( id = auth.uid() );
 CREATE POLICY "Profiles Read Admin" ON profiles FOR SELECT TO authenticated
 USING ( 
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' 
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
+    OR public.get_my_role_safe() IN ('admin')
 );
 
--- Read: I can see people I invited
+-- Read: Superuser can see people they invited
 CREATE POLICY "Profiles Read Invitees" ON profiles FOR SELECT TO authenticated
 USING ( invited_by = auth.uid() );
 
@@ -346,13 +398,18 @@ USING (
 CREATE POLICY "Assignments Read" ON project_assignments FOR SELECT TO authenticated
 USING (
     user_id = auth.uid()
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
+    OR public.get_my_role_safe() IN ('admin')
 );
+
+-- New: Superuser can read assignments for their own projects (Essential for Team List)
+CREATE POLICY "Assignments Read Owner" ON project_assignments FOR SELECT TO authenticated
+USING ( EXISTS (SELECT 1 FROM projects WHERE id = project_assignments.project_id AND created_by = auth.uid()) );
 
 CREATE POLICY "Assignments Write" ON project_assignments FOR ALL TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
+    OR public.get_my_role_safe() IN ('admin')
+    OR EXISTS (SELECT 1 FROM projects WHERE id = project_assignments.project_id AND created_by = auth.uid())
 );
 
 -- === INVITATIONS ===
@@ -373,6 +430,7 @@ USING (
 -- 6. RE-ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 
 -- 7. SYSTEM OVERRIDE
 UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com';
@@ -734,7 +792,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                        <table className="w-full text-sm text-left">
                            <tbody className="divide-y divide-slate-100">
                                {profiles
-                                 .filter(p => p.id !== profile.id) // Show everyone I can see (except myself)
+                                 .filter(p => p.invited_by === profile.id) // STRICTLY show only my invitees
                                  .map(p => (
                                    <tr key={p.id} className="hover:bg-slate-50">
                                        <td className="px-6 py-3">
@@ -743,7 +801,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                                        </td>
                                        <td className="px-6 py-3">
                                             <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded text-xs font-semibold uppercase">
-                                                Team Member
+                                                {getUserRolesText(p.id)}
                                             </span>
                                        </td>
                                        <td className="px-6 py-3 text-right">
@@ -754,7 +812,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                                        </td>
                                    </tr>
                                ))}
-                               {profiles.filter(p => p.id !== profile.id).length === 0 && (
+                               {profiles.filter(p => p.invited_by === profile.id).length === 0 && (
                                    <tr><td colSpan={3} className="px-6 py-4 text-center text-slate-400 text-xs italic">No active team members found.</td></tr>
                                )}
                            </tbody>
@@ -787,7 +845,7 @@ UPDATE profiles SET is_superuser = true, app_role = 'admin' WHERE lower(email) =
                           >
                               <option value="">Select user...</option>
                               {profiles
-                                .filter(p => p.id !== profile.id) // Allow assigning anyone visible (except self)
+                                .filter(p => p.invited_by === profile.id) // Only allow assigning my own team
                                 .filter(p => !projectAssignments.find(a => a.user_id === p.id)) // Exclude already assigned
                                 .map(p => (
                                   <option key={p.id} value={p.id}>

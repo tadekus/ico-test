@@ -237,6 +237,32 @@ export const fetchProjectAssignments = async (projectId: number): Promise<Projec
     })) as ProjectAssignment[];
 };
 
+// Fetch ALL assignments for projects OWNED by the current user
+// This helps display "Line Producer" in the team list instead of generic "User"
+export const fetchAssignmentsForOwner = async (ownerId: string): Promise<any[]> => {
+  if (!supabase) return [];
+  
+  // We want assignments where the linked project was created by `ownerId`
+  // This requires a join on projects.
+  const { data, error } = await supabase
+    .from('project_assignments')
+    .select(`
+      id,
+      user_id,
+      role,
+      project_id,
+      project:projects!inner(name, created_by)
+    `)
+    .eq('project.created_by', ownerId);
+
+  if (error) {
+    console.error("Fetch Owner Assignments Error:", error);
+    return [];
+  }
+  
+  return data;
+};
+
 export const addProjectAssignment = async (projectId: number, userId: string, role: ProjectRole) => {
     if (!supabase) throw new Error("Supabase not configured");
     
