@@ -252,7 +252,7 @@ export const fetchAssignedProjects = async (userId: string): Promise<Project[]> 
     // 1. Get Project IDs from assignments
     const { data: assignments, error: assignError } = await supabase
         .from('project_assignments')
-        .select('project_id, role')
+        .select('project_id')
         .eq('user_id', userId);
 
     if (assignError) {
@@ -278,6 +278,20 @@ export const fetchAssignedProjects = async (userId: string): Promise<Project[]> 
 
     return projects as Project[];
 };
+
+// Get the specific role a user has on a project
+export const getProjectRole = async (userId: string, projectId: number): Promise<ProjectRole | null> => {
+    if (!supabase) return null;
+    const { data, error } = await supabase
+        .from('project_assignments')
+        .select('role')
+        .eq('user_id', userId)
+        .eq('project_id', projectId)
+        .single();
+    
+    if (error || !data) return null;
+    return data.role as ProjectRole;
+}
 
 
 export const deleteProject = async (id: number): Promise<void> => {
