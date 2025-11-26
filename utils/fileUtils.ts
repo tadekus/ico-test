@@ -1,3 +1,4 @@
+
 import { FileData } from '../types';
 import * as XLSX from 'xlsx';
 
@@ -42,7 +43,7 @@ export const readFile = (file: File): Promise<Omit<FileData, 'id' | 'status'>> =
       }
     };
 
-    reader.onerror = () => reject(reader.error);
+    reader.onerror = () => reject(reader.error || new Error("Unknown FileReader error"));
     reader.readAsDataURL(file);
   });
 };
@@ -71,7 +72,7 @@ const parseExcel = (file: File): Promise<string> => {
         reject(err);
       }
     };
-    reader.onerror = () => reject(reader.error);
+    reader.onerror = () => reject(reader.error || new Error("Unknown Excel FileReader error"));
     reader.readAsBinaryString(file);
   });
 };
