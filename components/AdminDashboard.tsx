@@ -343,7 +343,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V19 (SOLIDIFICATION & FULL NAME FIX) ===
+-- === REPAIR V20 (ROLE CAST FIX) ===
 
 -- 1. DISABLE SECURITY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
@@ -441,7 +441,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.check_email_exists_global(text) OWNER TO postgres;
 
--- 7. CLAIM INVITED ROLE (NOW ACCEPTS NAME)
+-- 7. CLAIM INVITED ROLE (NOW ACCEPTS NAME AND CASTS ROLE)
 CREATE OR REPLACE FUNCTION public.claim_invited_role(p_full_name text)
 RETURNS text AS $$
 DECLARE
@@ -473,10 +473,10 @@ BEGIN
        -- Team Member Invite
        UPDATE public.profiles SET app_role = 'user', is_superuser = false WHERE id = auth.uid();
        
-       -- Force Assignment Insert
+       -- Force Assignment Insert (WITH CASTING TO project_role)
        IF inv_record.target_project_id IS NOT NULL THEN
           INSERT INTO public.project_assignments (project_id, user_id, role)
-          VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role)
+          VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role::project_role)
           ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role;
           
           -- Mark as Accepted
