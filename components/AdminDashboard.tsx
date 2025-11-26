@@ -315,7 +315,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V22: INVOICE DETAILS & SEQUENCE ===
+-- === REPAIR V23: INVOICE STATUS & STORAGE ===
 
 -- 1. ADD COLUMNS TO INVOICES
 DO $$ 
@@ -323,28 +323,23 @@ BEGIN
     ALTER TABLE invoices ADD COLUMN IF NOT EXISTS internal_id integer;
     ALTER TABLE invoices ADD COLUMN IF NOT EXISTS variable_symbol text;
     ALTER TABLE invoices ADD COLUMN IF NOT EXISTS description text;
-    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_path text; 
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS status text DEFAULT 'draft';
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_content text;
 EXCEPTION 
     WHEN others THEN null;
 END $$;
 
--- 2. DISABLE RLS TEMPORARILY TO FIX POLICIES
+-- 2. DISABLE RLS TEMPORARILY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
+ALTER TABLE invoices DISABLE ROW LEVEL SECURITY;
 
 -- 3. ENSURE EXTENSIONS & SCHEMAS
 CREATE SCHEMA IF NOT EXISTS extensions;
 CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA extensions;
 
--- 4. CLEANUP FUNCTIONS
-DROP FUNCTION IF EXISTS public.claim_invited_role(text) CASCADE;
-DROP FUNCTION IF EXISTS public.delete_team_member(uuid) CASCADE;
-DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
-DROP FUNCTION IF EXISTS public.is_project_owner(bigint) CASCADE;
-DROP FUNCTION IF EXISTS public.is_project_member(bigint) CASCADE;
-
--- 5. RECREATE HELPER FUNCTIONS (SECURITY DEFINER)
+-- 4. RECREATE HELPER FUNCTIONS (SECURITY DEFINER)
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
 RETURNS text AS $$
 BEGIN
@@ -369,7 +364,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.is_project_member(bigint) OWNER TO postgres;
 
--- 6. DELETE TEAM MEMBER RPC
+-- 5. DELETE TEAM MEMBER RPC
 CREATE OR REPLACE FUNCTION public.delete_team_member(target_user_id uuid)
 RETURNS void AS $$
 DECLARE
@@ -387,7 +382,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 ALTER FUNCTION public.delete_team_member(uuid) OWNER TO postgres;
 
--- 7. CLAIM INVITED ROLE RPC
+-- 6. CLAIM INVITED ROLE RPC
 CREATE OR REPLACE FUNCTION public.claim_invited_role(p_full_name text)
 RETURNS text AS $$
 DECLARE
@@ -422,7 +417,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.claim_invited_role(text) OWNER TO postgres;
 
--- 8. WIPE & REAPPLY POLICIES
+-- 7. WIPE & REAPPLY POLICIES
 DO $$ 
 DECLARE pol record;
 BEGIN 
@@ -431,25 +426,29 @@ BEGIN
   END LOOP;
 END $$;
 
--- Policies... (Simplified for brevity, ensuring standard access)
+-- Projects
 CREATE POLICY "Projects Read" ON projects FOR SELECT TO authenticated USING ( created_by = auth.uid() OR public.get_my_role_safe() = 'admin' OR public.is_project_member(id) );
 CREATE POLICY "Projects Insert" ON projects FOR INSERT TO authenticated WITH CHECK ( auth.uid() = created_by );
 CREATE POLICY "Projects Manage" ON projects FOR ALL TO authenticated USING ( created_by = auth.uid() OR public.get_my_role_safe() = 'admin' );
 
+-- Invoices
 CREATE POLICY "Invoices Read" ON invoices FOR SELECT TO authenticated USING ( user_id = auth.uid() OR public.is_project_owner(project_id) OR public.is_project_member(project_id) );
-CREATE POLICY "Invoices Write" ON invoices FOR ALL TO authenticated USING ( user_id = auth.uid() OR public.is_project_owner(project_id) );
+CREATE POLICY "Invoices Write" ON invoices FOR ALL TO authenticated USING ( user_id = auth.uid() OR public.is_project_owner(project_id) OR public.is_project_member(project_id) );
 
+-- Assignments
 CREATE POLICY "Assignments Read" ON project_assignments FOR SELECT TO authenticated USING ( user_id = auth.uid() OR public.get_my_role_safe() = 'admin' OR public.is_project_owner(project_id) );
 CREATE POLICY "Assignments Manage" ON project_assignments FOR ALL TO authenticated USING ( public.is_project_owner(project_id) );
 
-CREATE POLICY "Profiles View" ON profiles FOR SELECT TO authenticated USING ( true ); -- Simplify visibility for now to prevent issues
+-- Profiles
+CREATE POLICY "Profiles View" ON profiles FOR SELECT TO authenticated USING ( true ); 
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated USING ( id = auth.uid() );
 CREATE POLICY "Profiles Admin" ON profiles FOR ALL TO authenticated USING ( public.get_my_role_safe() = 'admin' );
 
+-- Invitations
 CREATE POLICY "Invites Read" ON user_invitations FOR SELECT TO authenticated USING ( invited_by = auth.uid() OR lower(email) = lower(auth.jwt() ->> 'email') );
 CREATE POLICY "Invites Manage" ON user_invitations FOR ALL TO authenticated USING ( invited_by = auth.uid() OR public.get_my_role_safe() IN ('admin', 'superuser') );
 
--- 9. ENABLE SECURITY
+-- 8. ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;

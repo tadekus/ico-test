@@ -135,8 +135,8 @@ function App() {
                         <span className="font-bold text-slate-800 text-lg tracking-tight">MovieAcct</span>
                     </div>
 
-                    {/* PROJECT SELECTOR (Visible for everyone except maybe pure Admins who focus on System) */}
-                    {!isAdmin && (
+                    {/* PROJECT SELECTOR (Visible for everyone except Admins/Superusers who focus on System/Mgmt) */}
+                    {!isAdmin && !isSuperuser && (
                         <div className="hidden md:flex items-center gap-2 border-l border-slate-200 pl-6">
                             <label className="text-xs font-bold text-slate-400 uppercase">Project</label>
                             <select 

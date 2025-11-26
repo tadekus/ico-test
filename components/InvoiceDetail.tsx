@@ -1,16 +1,17 @@
 
 import React, { useState, useEffect } from 'react';
-import { FileData, ExtractionResult, Project } from '../types';
-import { saveExtractionResult, isSupabaseConfigured } from '../services/supabaseService';
+import { FileData, ExtractionResult, Project, SavedInvoice } from '../types';
+import { updateInvoice } from '../services/supabaseService';
 
 interface InvoiceDetailProps {
+  invoice: SavedInvoice;
   fileData: FileData;
   project: Project | null;
   onBack: () => void;
-  onSaved: (fileId: string) => void;
+  onSaved: () => void;
 }
 
-const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ fileData, project, onBack, onSaved }) => {
+const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, project, onBack, onSaved }) => {
   const [editedResult, setEditedResult] = useState<ExtractionResult | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -23,13 +24,28 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ fileData, project, onBack
 
   if (!editedResult) return <div>Loading data...</div>;
 
-  const handleSave = async () => {
+  const handleApprove = async () => {
     setSaveStatus('saving');
     try {
-      if (!project) throw new Error("No project selected.");
-      await saveExtractionResult(editedResult, project.id);
+      if (!project) throw new Error("No project context.");
+      
+      // Map extracted result back to SavedInvoice structure
+      const updates: Partial<SavedInvoice> = {
+          company_name: editedResult.companyName || null,
+          ico: editedResult.ico || null,
+          variable_symbol: editedResult.variableSymbol || null,
+          description: editedResult.description || null,
+          amount_without_vat: editedResult.amountWithoutVat || null,
+          amount_with_vat: editedResult.amountWithVat || null,
+          bank_account: editedResult.bankAccount || null,
+          iban: editedResult.iban || null,
+          status: 'approved'
+      };
+
+      await updateInvoice(invoice.id, updates);
+      
       setSaveStatus('success');
-      setTimeout(() => onSaved(fileData.id), 1500);
+      setTimeout(() => onSaved(), 1000);
     } catch (err: any) {
       setSaveStatus('error');
       setErrorMessage(err.message || "Failed to save");
@@ -41,145 +57,151 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ fileData, project, onBack
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[calc(100vh-140px)]">
-      {/* LEFT: PREVIEW */}
-      <div className="bg-slate-800 rounded-xl overflow-hidden flex flex-col">
-        <div className="bg-slate-900 p-3 text-slate-300 text-sm flex justify-between items-center">
-             <span className="font-mono">{fileData.file.name}</span>
-             <span className="text-xs uppercase bg-slate-700 px-2 py-0.5 rounded">{fileData.type}</span>
-        </div>
-        <div className="flex-1 bg-slate-100 overflow-auto relative flex items-center justify-center">
-           {fileData.type === 'image' && fileData.preview && (
-               <img src={fileData.preview} alt="Invoice Preview" className="max-w-full max-h-full object-contain" />
-           )}
-           {fileData.type === 'pdf' && (
-               <iframe 
-                 src={fileData.preview || (fileData.base64 ? `data:application/pdf;base64,${fileData.base64}` : '')} 
-                 className="w-full h-full" 
-                 title="PDF Preview"
-               />
-           )}
-           {fileData.type === 'excel' && (
-               <div className="p-8 text-center text-slate-500">
-                   <p>Excel Preview not available.</p>
-                   <pre className="mt-4 text-xs text-left bg-white p-4 rounded border overflow-auto max-h-96">
-                       {fileData.textContent}
-                   </pre>
-               </div>
-           )}
-        </div>
-      </div>
-
-      {/* RIGHT: DATA ENTRY */}
-      <div className="bg-white rounded-xl shadow-xl border border-slate-200 flex flex-col">
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-xl">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-140px)]">
+      
+      {/* LEFT: DATA ENTRY (Narrower) */}
+      <div className="lg:col-span-1 bg-white rounded-xl shadow-xl border border-slate-200 flex flex-col h-full">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-xl">
            <button onClick={onBack} className="text-slate-500 hover:text-indigo-600 text-sm flex items-center gap-1 font-medium">
              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
              </svg>
-             Back to Invoicing
+             Back
            </button>
-           <h2 className="text-lg font-bold text-slate-800">Invoice Details</h2>
+           <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wide">Invoice Data #{invoice.internal_id}</h2>
         </div>
 
-        <div className="p-6 overflow-y-auto flex-1 space-y-6">
-            {/* Status Bar */}
-            <div className="flex items-center gap-4 text-sm bg-indigo-50 p-3 rounded-lg text-indigo-800">
-                <span className="font-semibold">Project:</span> {project?.name}
-                <span className="mx-2 text-indigo-300">|</span>
-                <span className="font-semibold">Next Invoice ID:</span> # Auto-assigned on Save
+        <div className="p-4 overflow-y-auto flex-1 space-y-4">
+            {/* Status Info */}
+            <div className="bg-indigo-50 p-3 rounded-lg text-xs text-indigo-800 mb-2">
+                <div className="font-semibold">Project: {project?.name}</div>
+                <div>Status: <span className="uppercase font-bold">{invoice.status}</span></div>
             </div>
 
-            {/* Form */}
-            <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Supplier / Company Name</label>
-                    <input 
-                      type="text" 
-                      value={editedResult.companyName || ''} 
-                      onChange={e => handleInputChange('companyName', e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none" 
-                    />
-                </div>
+            {/* Form Fields - Compact, Line by Line */}
+            <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Supplier</label>
+                <input 
+                  type="text" 
+                  value={editedResult.companyName || ''} 
+                  onChange={e => handleInputChange('companyName', e.target.value)}
+                  className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm focus:border-indigo-500 outline-none" 
+                />
+            </div>
+            
+            <div className="grid grid-cols-2 gap-2">
                 <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">IČO (Reg. No)</label>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">IČO</label>
                     <input 
                       type="text" 
                       value={editedResult.ico || ''} 
                       onChange={e => handleInputChange('ico', e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-300 rounded font-mono" 
+                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono" 
                     />
                 </div>
                 <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Variable Symbol</label>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Var. Symbol</label>
                     <input 
                       type="text" 
                       value={editedResult.variableSymbol || ''} 
                       onChange={e => handleInputChange('variableSymbol', e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-300 rounded font-mono" 
+                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono" 
                     />
                 </div>
-                <div className="col-span-2">
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Description (Service/Goods)</label>
-                    <textarea 
-                      value={editedResult.description || ''} 
-                      onChange={e => handleInputChange('description', e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-300 rounded h-20" 
-                    />
-                </div>
+            </div>
+
+            <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Description</label>
+                <textarea 
+                  value={editedResult.description || ''} 
+                  onChange={e => handleInputChange('description', e.target.value)}
+                  className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm h-16 resize-none" 
+                />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
                 <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Amount (Excl. VAT)</label>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Excl. VAT</label>
                     <input 
                       type="number" 
                       value={editedResult.amountWithoutVat || ''} 
                       onChange={e => handleInputChange('amountWithoutVat', parseFloat(e.target.value))}
-                      className="w-full px-3 py-2 border border-slate-300 rounded font-mono text-right" 
+                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono text-right" 
                     />
                 </div>
                 <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Total (Incl. VAT)</label>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Incl. VAT</label>
                     <input 
                       type="number" 
                       value={editedResult.amountWithVat || ''} 
                       onChange={e => handleInputChange('amountWithVat', parseFloat(e.target.value))}
-                      className="w-full px-3 py-2 border border-slate-300 rounded font-mono text-right bg-slate-50" 
+                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono text-right bg-slate-50" 
                     />
                 </div>
-                <div className="col-span-2">
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Bank Account / IBAN</label>
-                    <input 
-                      type="text" 
-                      value={editedResult.bankAccount || ''} 
-                      onChange={e => handleInputChange('bankAccount', e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-300 rounded font-mono text-sm mb-2" 
-                      placeholder="Account Number"
-                    />
-                    <input 
-                      type="text" 
-                      value={editedResult.iban || ''} 
-                      onChange={e => handleInputChange('iban', e.target.value)}
-                      className="w-full px-3 py-2 border border-slate-300 rounded font-mono text-sm" 
-                      placeholder="IBAN"
-                    />
-                </div>
+            </div>
+
+            <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Bank Account</label>
+                <input 
+                  type="text" 
+                  value={editedResult.bankAccount || ''} 
+                  onChange={e => handleInputChange('bankAccount', e.target.value)}
+                  className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono mb-1" 
+                  placeholder="Local"
+                />
+                <input 
+                  type="text" 
+                  value={editedResult.iban || ''} 
+                  onChange={e => handleInputChange('iban', e.target.value)}
+                  className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono" 
+                  placeholder="IBAN"
+                />
             </div>
         </div>
 
-        <div className="p-6 border-t border-slate-100 bg-slate-50 rounded-b-xl flex justify-between items-center">
-            <span className="text-xs text-slate-400">Confidence: {Math.round(editedResult.confidence * 100)}%</span>
-            <div className="flex gap-3 items-center">
-                {errorMessage && <span className="text-red-500 text-sm font-medium">{errorMessage}</span>}
-                <button 
-                   onClick={handleSave}
-                   disabled={saveStatus === 'saving' || saveStatus === 'success'}
-                   className={`px-6 py-2.5 rounded-lg text-white font-medium shadow-md transition-all
-                     ${saveStatus === 'success' ? 'bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-700'}
-                     disabled:opacity-75 disabled:cursor-not-allowed
-                   `}
-                >
-                    {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved!' : 'Save & Assign ID'}
-                </button>
-            </div>
+        <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-xl">
+            {errorMessage && <div className="text-red-500 text-xs mb-2">{errorMessage}</div>}
+            <button 
+               onClick={handleApprove}
+               disabled={saveStatus === 'saving' || saveStatus === 'success'}
+               className={`w-full py-2 rounded-lg text-white font-medium shadow-sm transition-all text-sm
+                 ${saveStatus === 'success' ? 'bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-700'}
+                 disabled:opacity-75 disabled:cursor-not-allowed
+               `}
+            >
+                {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved' : 'Approve Invoice'}
+            </button>
+        </div>
+      </div>
+
+      {/* RIGHT: PREVIEW (Wider) */}
+      <div className="lg:col-span-2 bg-slate-800 rounded-xl overflow-hidden flex flex-col h-full shadow-2xl">
+        <div className="bg-slate-900 p-2 text-slate-400 text-xs flex justify-between items-center px-4">
+             <span className="font-mono">Document Preview</span>
+             <span className="uppercase bg-slate-700 px-2 py-0.5 rounded text-[10px]">{fileData.type}</span>
+        </div>
+        <div className="flex-1 bg-slate-200 overflow-auto relative flex items-center justify-center p-4">
+           {fileData.type === 'image' && fileData.preview && (
+               <img src={fileData.preview} alt="Invoice Preview" className="max-w-full max-h-full object-contain shadow-lg" />
+           )}
+           {fileData.type === 'pdf' && (
+               <iframe 
+                 src={(fileData.preview || (fileData.base64 ? `data:application/pdf;base64,${fileData.base64}` : '')) + '#toolbar=0&navpanes=0&scrollbar=0'} 
+                 className="w-full h-full shadow-lg bg-white" 
+                 title="PDF Preview"
+               />
+           )}
+           {fileData.type === 'excel' && (
+               <div className="p-8 text-center text-slate-500 bg-white shadow rounded-lg">
+                   <p>Excel Preview not available.</p>
+                   <pre className="mt-4 text-xs text-left bg-slate-50 p-4 rounded border overflow-auto max-h-96">
+                       {fileData.textContent}
+                   </pre>
+               </div>
+           )}
+           {!fileData.preview && !fileData.base64 && !fileData.textContent && (
+               <div className="text-slate-500">Preview not available</div>
+           )}
         </div>
       </div>
     </div>

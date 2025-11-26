@@ -30,6 +30,8 @@ export interface SavedInvoice {
   raw_text: string | null;
   user_id: string; // The uploader
   project_id?: number | null; // Linked project
+  status: 'draft' | 'approved';
+  file_content?: string | null; // Base64 content for preview
 }
 
 export interface FileData {

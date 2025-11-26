@@ -134,7 +134,12 @@ export const getNextInvoiceId = async (projectId: number): Promise<number> => {
     return 1;
 };
 
-export const saveExtractionResult = async (result: ExtractionResult, projectId?: number) => {
+export const saveExtractionResult = async (
+    result: ExtractionResult, 
+    projectId?: number,
+    status: 'draft' | 'approved' = 'draft',
+    base64?: string
+) => {
   if (!supabase) throw new Error("Supabase not configured.");
 
   const user = await getCurrentUser();
@@ -163,6 +168,8 @@ export const saveExtractionResult = async (result: ExtractionResult, projectId?:
         currency: result.currency,
         confidence: result.confidence,
         raw_text: result.rawText,
+        status: status,
+        file_content: base64 || null,
         created_at: new Date().toISOString()
       }
     ])
@@ -173,19 +180,32 @@ export const saveExtractionResult = async (result: ExtractionResult, projectId?:
   return data;
 };
 
+export const updateInvoice = async (
+    id: number, 
+    updates: Partial<SavedInvoice>
+) => {
+    if (!supabase) throw new Error("Supabase not configured");
+    const { data, error } = await supabase
+        .from('invoices')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
+    if (error) throw error;
+    return data;
+};
+
 export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]> => {
   if (!supabase) throw new Error("Supabase is not configured.");
 
   let query = supabase
     .from('invoices')
-    .select('*')
-    .order('created_at', { ascending: false });
+    .select('id, created_at, internal_id, ico, company_name, description, amount_with_vat, amount_without_vat, currency, status, project_id, file_content, variable_symbol, bank_account, iban, confidence')
+    .order('internal_id', { ascending: false });
 
   if (projectId) {
       query = query.eq('project_id', projectId);
   } else {
-      // If no project specified, only show invoices NOT attached to a project 
-      // OR invoices user uploaded if they aren't using projects
       query = query.is('project_id', null); 
   }
 
@@ -245,41 +265,29 @@ export const fetchProjects = async (): Promise<Project[]> => {
     return data as Project[];
 };
 
-// Fetch projects that the current user is assigned to
 export const fetchAssignedProjects = async (userId: string): Promise<Project[]> => {
     if (!supabase) return [];
     
-    // 1. Get Project IDs from assignments
     const { data: assignments, error: assignError } = await supabase
         .from('project_assignments')
         .select('project_id')
         .eq('user_id', userId);
 
-    if (assignError) {
-        console.error("Error fetching assignments", assignError);
-        return [];
-    }
-
+    if (assignError) return [];
     if (!assignments || assignments.length === 0) return [];
 
     const projectIds = assignments.map(a => a.project_id);
 
-    // 2. Fetch Projects details
     const { data: projects, error: projError } = await supabase
         .from('projects')
         .select('*')
         .in('id', projectIds)
         .order('created_at', { ascending: false });
         
-    if (projError) {
-        console.error("Error fetching assigned projects", projError);
-        return [];
-    }
-
+    if (projError) return [];
     return projects as Project[];
 };
 
-// Get the specific role a user has on a project
 export const getProjectRole = async (userId: string, projectId: number): Promise<ProjectRole | null> => {
     if (!supabase) return null;
     const { data, error } = await supabase
