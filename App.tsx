@@ -50,44 +50,57 @@ function App() {
   }, [isAdmin, isSuperuser, currentProject, currentProjectRole]);
 
   const handleUserSession = async (currentUser: User | null) => {
-    setUser(currentUser);
-    if (currentUser) {
-      if (currentUser.email) {
-        const isPending = await checkMyPendingInvitation(currentUser.email);
-        if (isPending) { setHasPendingInvite(true); setIsLoadingSession(false); return; }
-      }
+    try {
+      setUser(currentUser);
+      if (currentUser) {
+        if (currentUser.email) {
+          const isPending = await checkMyPendingInvitation(currentUser.email);
+          if (isPending) { 
+              setHasPendingInvite(true); 
+              setIsLoadingSession(false); 
+              return; 
+          }
+        }
 
-      let profile = await getUserProfile(currentUser.id);
-      
-      // Master Override
-      if (!profile && currentUser.email?.toLowerCase() === 'tadekus@gmail.com') {
-          profile = { id: currentUser.id, email: currentUser.email, full_name: 'Master Admin (Ghost)', app_role: 'admin', created_at: new Date().toISOString() };
-      }
-      
-      if (profile) setUserProfile(profile);
+        let profile = await getUserProfile(currentUser.id);
+        
+        // Master Override
+        if (!profile && currentUser.email?.toLowerCase() === 'tadekus@gmail.com') {
+            profile = { id: currentUser.id, email: currentUser.email, full_name: 'Master Admin (Ghost)', app_role: 'admin', created_at: new Date().toISOString() };
+        }
+        
+        if (profile) setUserProfile(profile);
 
-      // Load Projects
-      const projects = await fetchAssignedProjects(currentUser.id);
-      setAssignedProjects(projects);
-      
-      // AUTO-REDIRECT: Select first project default if available
-      // This ensures regular users skip the empty "Overview" and go straight to work
-      if (projects.length > 0) {
-          // Pass currentUser explicitely because 'user' state might not be updated yet in this closure
-          await handleProjectChange(projects[0].id.toString(), projects, currentUser);
+        // Load Projects
+        const projects = await fetchAssignedProjects(currentUser.id);
+        setAssignedProjects(projects);
+        
+        // AUTO-REDIRECT: Select first project default if available
+        // This ensures regular users skip the empty "Overview" and go straight to work
+        if (projects.length > 0) {
+            // Pass currentUser explicitly because 'user' state might not be updated yet in this closure
+            try {
+              await handleProjectChange(projects[0].id.toString(), projects, currentUser);
+            } catch (err) {
+              console.error("Auto-redirect failed", err);
+            }
+        } else {
+            setCurrentProject(null);
+            setCurrentProjectRole(null);
+        }
+
       } else {
-          setCurrentProject(null);
-          setCurrentProjectRole(null);
+        setUserProfile(null);
+        setHasPendingInvite(false);
+        setAssignedProjects([]);
+        setCurrentProject(null);
+        setCurrentProjectRole(null);
       }
-
-    } else {
-      setUserProfile(null);
-      setHasPendingInvite(false);
-      setAssignedProjects([]);
-      setCurrentProject(null);
-      setCurrentProjectRole(null);
+    } catch (error) {
+      console.error("Session loading error:", error);
+    } finally {
+      setIsLoadingSession(false);
     }
-    setIsLoadingSession(false);
   };
 
   const handleProjectChange = async (projectId: string, projectsList = assignedProjects, targetUser: User | null = user) => {
