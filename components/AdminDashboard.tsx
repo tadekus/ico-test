@@ -343,7 +343,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V18 (AUTH DELETE & ROLE FIX) ===
+-- === REPAIR V19 (SOLIDIFICATION & FULL NAME FIX) ===
 
 -- 1. DISABLE SECURITY
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
@@ -356,7 +356,8 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto" SCHEMA extensions;
 
 -- 3. CLEANUP OLD FUNCTIONS
 DROP FUNCTION IF EXISTS public.delete_team_member(uuid) CASCADE;
-DROP FUNCTION IF EXISTS public.claim_invited_role() CASCADE;
+DROP FUNCTION IF EXISTS public.claim_invited_role() CASCADE; -- Drop old 0-arg version
+DROP FUNCTION IF EXISTS public.claim_invited_role(text) CASCADE; -- Drop new version if exists
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 DROP FUNCTION IF EXISTS public.get_my_team_mates_ids() CASCADE;
 DROP FUNCTION IF EXISTS public.is_project_owner(bigint) CASCADE;
@@ -440,8 +441,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ALTER FUNCTION public.check_email_exists_global(text) OWNER TO postgres;
 
--- 7. CLAIM INVITED ROLE
-CREATE OR REPLACE FUNCTION public.claim_invited_role()
+-- 7. CLAIM INVITED ROLE (NOW ACCEPTS NAME)
+CREATE OR REPLACE FUNCTION public.claim_invited_role(p_full_name text)
 RETURNS text AS $$
 DECLARE
   inv_record record;
@@ -455,13 +456,21 @@ BEGIN
   LIMIT 1 INTO inv_record;
 
   IF inv_record.id IS NOT NULL THEN
-    UPDATE public.profiles SET invited_by = inv_record.invited_by WHERE id = auth.uid();
+    -- Update Name & Inviter & Role (All in God Mode)
+    UPDATE public.profiles SET 
+        invited_by = inv_record.invited_by,
+        full_name = p_full_name
+    WHERE id = auth.uid();
     
     IF inv_record.target_role IS NULL THEN
+       -- Admin/Superuser Invite
        UPDATE public.profiles SET app_role = 'superuser', is_superuser = true WHERE id = auth.uid();
+       
+       -- Mark as Accepted
+       UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
        RETURN 'Role Claimed: Superuser';
     ELSE
-       -- Set as User
+       -- Team Member Invite
        UPDATE public.profiles SET app_role = 'user', is_superuser = false WHERE id = auth.uid();
        
        -- Force Assignment Insert
@@ -469,18 +478,23 @@ BEGIN
           INSERT INTO public.project_assignments (project_id, user_id, role)
           VALUES (inv_record.target_project_id, auth.uid(), inv_record.target_role)
           ON CONFLICT (project_id, user_id) DO UPDATE SET role = EXCLUDED.role;
+          
+          -- Mark as Accepted
+          UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
           RETURN 'Role Claimed: ' || inv_record.target_role;
        END IF;
+       
+       -- Mark as Accepted
+       UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
        RETURN 'Role Claimed: User (No Project)';
     END IF;
 
-    UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
   ELSE
     RETURN 'No pending invitation found';
   END IF;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-ALTER FUNCTION public.claim_invited_role() OWNER TO postgres;
+ALTER FUNCTION public.claim_invited_role(text) OWNER TO postgres;
 
 -- 8. WIPE OLD POLICIES
 DO $$ 

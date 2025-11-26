@@ -44,31 +44,35 @@ export const completeAccountSetup = async (password: string, fullName: string) =
   const { error: authError } = await supabase.auth.updateUser({ password });
   if (authError) throw authError;
 
-  // 2. Update Profile Name
+  // 2. Update Profile Name (Try Direct Update first, as normal users should be able to update self)
   const user = await getCurrentUser();
   if (user) {
+    // Attempt direct update (legacy/standard path)
     const { error: profileError } = await supabase
       .from('profiles')
       .update({ full_name: fullName })
       .eq('id', user.id);
-    
-    if (profileError) {
-       if (profileError.message.includes("full_name") && profileError.message.includes("column")) {
-          throw new Error("Database schema out of date. Admin needs to run the SQL script to add 'full_name' column.");
-       }
-       throw profileError;
-    }
 
-    // 3. FAIL-SAFE: Explicitly claim the invited role
+    // If direct update failed, we don't throw immediately, 
+    // because the RPC call below is the "God Mode" backup that can fix it.
+
+    // 3. FAIL-SAFE: Explicitly claim the invited role AND set the name
     try {
-      const { data: rpcData, error: rpcError } = await supabase.rpc('claim_invited_role');
+      const { data: rpcData, error: rpcError } = await supabase.rpc('claim_invited_role', { 
+          p_full_name: fullName 
+      });
+      
       if (rpcError) {
         console.error("Role claim RPC failed:", rpcError);
+        // If both failed, then we throw
+        if (profileError) throw profileError; 
+        throw rpcError;
       } else {
         console.log("Role claim RPC result:", rpcData);
       }
     } catch (e) {
       console.warn("RPC call error", e);
+      throw e;
     }
   }
 };
