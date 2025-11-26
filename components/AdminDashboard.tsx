@@ -262,16 +262,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V7 (Anti-Recursion & Self Update) ===
+-- === REPAIR V8 (Final Anti-Recursion) ===
 
--- 1. DISABLE SECURITY temporarily to prevent crashes during migration
+-- 1. DISABLE SECURITY to prevent crashes during repair
 ALTER TABLE profiles DISABLE ROW LEVEL SECURITY;
-ALTER TABLE user_invitations DISABLE ROW LEVEL SECURITY;
-ALTER TABLE project_assignments DISABLE ROW LEVEL SECURITY;
-ALTER TABLE projects DISABLE ROW LEVEL SECURITY;
 
--- 2. CREATE HELPER FUNCTIONS (Security Definer = God Mode)
--- These allow checking roles and team status without triggering infinite policy loops.
+-- 2. CREATE GOD-MODE FUNCTIONS
+-- These functions use SECURITY DEFINER to bypass RLS loops.
 
 DROP FUNCTION IF EXISTS public.get_my_role_safe() CASCADE;
 CREATE OR REPLACE FUNCTION public.get_my_role_safe()
@@ -293,19 +290,17 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
--- 3. DROP OLD POLICIES (Cleanup)
+-- 3. DROP OLD POLICIES CASCADE
 DROP POLICY IF EXISTS "Profiles Visibility" ON profiles;
 DROP POLICY IF EXISTS "Profiles Admin Update" ON profiles;
-DROP POLICY IF EXISTS "Invitations Visibility" ON user_invitations;
-DROP POLICY IF EXISTS "Projects Admin" ON projects;
-DROP POLICY IF EXISTS "Projects Team Read" ON projects;
-DROP POLICY IF EXISTS "Assignments Admin" ON project_assignments;
-DROP POLICY IF EXISTS "Assignments Read Own" ON project_assignments;
+DROP POLICY IF EXISTS "Profiles Update Self" ON profiles;
+DROP POLICY IF EXISTS "Profiles Read" ON profiles;
+DROP POLICY IF EXISTS "View profiles strict" ON profiles;
 
 
--- 4. CREATE NEW POLICIES
+-- 4. CREATE NEW POLICIES (Strict Separation)
 
--- === PROFILES ===
+-- A. READ Policy (Who can see whom)
 CREATE POLICY "Profiles Read" ON profiles FOR SELECT TO authenticated
 USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com' -- Master
@@ -315,8 +310,10 @@ USING (
     OR id IN (SELECT uid FROM public.get_my_team_mates_ids()) -- Team Mates (Safe)
 );
 
+-- B. UPDATE Policy (Who can edit)
+-- CRITICAL: This is split to prevent recursion during 'completeAccountSetup'
 CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated
-USING ( id = auth.uid() ) -- Allows user to set their name setup
+USING ( id = auth.uid() ) 
 WITH CHECK ( id = auth.uid() );
 
 CREATE POLICY "Profiles Admin Update" ON profiles FOR UPDATE TO authenticated
@@ -324,46 +321,26 @@ USING (
     lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
     OR public.get_my_role_safe() = 'admin'
 );
--- Note: Superusers cannot edit other profiles, only disable them (handled by RPC if needed or separate toggle logic)
-
-
--- === PROJECTS ===
-CREATE POLICY "Projects Admin" ON projects FOR ALL TO authenticated
-USING (
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
-);
-
-CREATE POLICY "Projects Team Read" ON projects FOR SELECT TO authenticated
-USING (
-    EXISTS (SELECT 1 FROM project_assignments WHERE user_id = auth.uid() AND project_id = projects.id)
-);
-
--- === ASSIGNMENTS ===
-CREATE POLICY "Assignments Admin" ON project_assignments FOR ALL TO authenticated
-USING (
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
-);
-
-CREATE POLICY "Assignments Read Own" ON project_assignments FOR SELECT TO authenticated
-USING ( user_id = auth.uid() );
-
--- === INVITATIONS ===
-CREATE POLICY "Invitations Visibility" ON user_invitations FOR ALL TO authenticated
-USING (
-    lower(auth.jwt() ->> 'email') = 'tadekus@gmail.com'
-    OR public.get_my_role_safe() IN ('admin', 'superuser')
-    OR invited_by = auth.uid()
-    OR lower(email) = lower(auth.jwt() ->> 'email')
-);
 
 -- 5. RE-ENABLE SECURITY
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_invitations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE project_assignments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+
+-- 6. ENSURE FOREIGN KEYS ARE CASCADING (Fix Deletion Error)
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'projects_created_by_fkey') THEN
+        ALTER TABLE projects DROP CONSTRAINT projects_created_by_fkey;
+        ALTER TABLE projects ADD CONSTRAINT projects_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+    END IF;
+    
+    IF EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'user_invitations_invited_by_fkey') THEN
+        ALTER TABLE user_invitations DROP CONSTRAINT user_invitations_invited_by_fkey;
+        ALTER TABLE user_invitations ADD CONSTRAINT user_invitations_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+    END IF;
+END $$;
 `;
+
+  // Merge Profiles and Pending System Invites for the Admin List
+  const pendingSystemInvites = invitations.filter(inv => inv.target_app_role === 'admin' || inv.target_app_role === 'superuser');
 
   if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
 
@@ -484,6 +461,27 @@ ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
+                            {/* PENDING INVITATIONS SECTION */}
+                            {pendingSystemInvites.map(inv => (
+                                <tr key={`inv-${inv.id}`} className="bg-amber-50/50 hover:bg-amber-50">
+                                    <td className="px-6 py-4">
+                                        <div className="font-medium text-slate-900 italic opacity-75">Pending Setup...</div>
+                                        <div className="text-slate-500 text-xs">{inv.email}</div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        {inv.target_app_role === 'admin' && <span className="px-2 py-1 border border-purple-200 text-purple-600 rounded-full text-xs font-medium">Administrator</span>}
+                                        {inv.target_app_role === 'superuser' && <span className="px-2 py-1 border border-indigo-200 text-indigo-600 rounded-full text-xs font-medium">Superuser</span>}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <span className="text-amber-600 font-medium text-xs bg-amber-100 px-2 py-1 rounded">Pending Invite</span>
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                        <button onClick={() => handleRevokeInvitation(inv.id)} className="text-xs text-red-500 hover:text-red-700 hover:underline">Revoke</button>
+                                    </td>
+                                </tr>
+                            ))}
+
+                            {/* ACTIVE PROFILES SECTION */}
                             {profiles
                               .filter(p => p.app_role === 'admin' || p.app_role === 'superuser')
                               .map(p => (
@@ -511,7 +509,8 @@ ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
                                     </td>
                                 </tr>
                             ))}
-                            {profiles.filter(p => p.app_role === 'admin' || p.app_role === 'superuser').length === 0 && (
+                            
+                            {profiles.filter(p => p.app_role === 'admin' || p.app_role === 'superuser').length === 0 && pendingSystemInvites.length === 0 && (
                                 <tr>
                                     <td colSpan={4} className="px-6 py-8 text-center text-slate-400 italic">No other system users found.</td>
                                 </tr>
