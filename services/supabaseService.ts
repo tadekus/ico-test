@@ -44,17 +44,13 @@ export const completeAccountSetup = async (password: string, fullName: string) =
   const { error: authError } = await supabase.auth.updateUser({ password });
   if (authError) throw authError;
 
-  // 2. Update Profile Name (Try Direct Update first, as normal users should be able to update self)
+  // 2. Update Profile Name (Try Direct Update first)
   const user = await getCurrentUser();
   if (user) {
-    // Attempt direct update (legacy/standard path)
     const { error: profileError } = await supabase
       .from('profiles')
       .update({ full_name: fullName })
       .eq('id', user.id);
-
-    // If direct update failed, we don't throw immediately, 
-    // because the RPC call below is the "God Mode" backup that can fix it.
 
     // 3. FAIL-SAFE: Explicitly claim the invited role AND set the name
     try {
@@ -64,11 +60,8 @@ export const completeAccountSetup = async (password: string, fullName: string) =
       
       if (rpcError) {
         console.error("Role claim RPC failed:", rpcError);
-        // If both failed, then we throw
         if (profileError) throw profileError; 
         throw rpcError;
-      } else {
-        console.log("Role claim RPC result:", rpcData);
       }
     } catch (e) {
       console.warn("RPC call error", e);
@@ -108,30 +101,49 @@ export const adminResetPassword = async (userId: string, newPassword: string) =>
 
 export const deleteProfile = async (userId: string) => {
   if (!supabase) throw new Error("Supabase not configured");
-  
-  // Call the secure RPC function that deletes from auth.users
-  // This triggers a cascade delete to profiles/assignments
   const { error } = await supabase.rpc('delete_team_member', { target_user_id: userId });
 
   if (error) {
-     // Fallback for Admins if RPC fails or not updated yet
      console.warn("RPC delete failed, trying direct table delete", error);
-     const { error: tableError } = await supabase
-        .from('profiles')
-        .delete()
-        .eq('id', userId);
-        
+     const { error: tableError } = await supabase.from('profiles').delete().eq('id', userId);
      if (tableError) throw new Error(`Failed to delete user: ${error.message}`);
   }
 };
 
 // --- DATABASE OPERATIONS: INVOICES ---
 
+export const getNextInvoiceId = async (projectId: number): Promise<number> => {
+    if (!supabase) return 1;
+    
+    // Get max internal_id for this project
+    const { data, error } = await supabase
+        .from('invoices')
+        .select('internal_id')
+        .eq('project_id', projectId)
+        .order('internal_id', { ascending: false })
+        .limit(1);
+        
+    if (error) {
+        console.error("Error getting next invoice ID", error);
+        return 1;
+    }
+    
+    if (data && data.length > 0 && data[0].internal_id) {
+        return data[0].internal_id + 1;
+    }
+    return 1;
+};
+
 export const saveExtractionResult = async (result: ExtractionResult, projectId?: number) => {
   if (!supabase) throw new Error("Supabase not configured.");
 
   const user = await getCurrentUser();
   if (!user) throw new Error("You must be logged in.");
+  
+  let internalId = null;
+  if (projectId) {
+      internalId = await getNextInvoiceId(projectId);
+  }
 
   const { data, error } = await supabase
     .from('invoices')
@@ -139,10 +151,13 @@ export const saveExtractionResult = async (result: ExtractionResult, projectId?:
       {
         user_id: user.id,
         project_id: projectId || null,
+        internal_id: internalId,
         ico: result.ico,
         company_name: result.companyName,
         bank_account: result.bankAccount,
         iban: result.iban,
+        variable_symbol: result.variableSymbol,
+        description: result.description,
         amount_with_vat: result.amountWithVat,
         amount_without_vat: result.amountWithoutVat,
         currency: result.currency,
@@ -151,19 +166,30 @@ export const saveExtractionResult = async (result: ExtractionResult, projectId?:
         created_at: new Date().toISOString()
       }
     ])
-    .select();
+    .select()
+    .single();
 
   if (error) throw error;
   return data;
 };
 
-export const fetchInvoices = async (): Promise<SavedInvoice[]> => {
+export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]> => {
   if (!supabase) throw new Error("Supabase is not configured.");
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('invoices')
     .select('*')
     .order('created_at', { ascending: false });
+
+  if (projectId) {
+      query = query.eq('project_id', projectId);
+  } else {
+      // If no project specified, only show invoices NOT attached to a project 
+      // OR invoices user uploaded if they aren't using projects
+      query = query.is('project_id', null); 
+  }
+
+  const { data, error } = await query;
 
   if (error) throw error;
   return data as SavedInvoice[];
@@ -171,12 +197,7 @@ export const fetchInvoices = async (): Promise<SavedInvoice[]> => {
 
 export const deleteInvoice = async (id: number): Promise<void> => {
   if (!supabase) throw new Error("Supabase is not configured.");
-
-  const { error } = await supabase
-    .from('invoices')
-    .delete()
-    .eq('id', id);
-
+  const { error } = await supabase.from('invoices').delete().eq('id', id);
   if (error) throw error;
 };
 
@@ -224,26 +245,54 @@ export const fetchProjects = async (): Promise<Project[]> => {
     return data as Project[];
 };
 
+// Fetch projects that the current user is assigned to
+export const fetchAssignedProjects = async (userId: string): Promise<Project[]> => {
+    if (!supabase) return [];
+    
+    // 1. Get Project IDs from assignments
+    const { data: assignments, error: assignError } = await supabase
+        .from('project_assignments')
+        .select('project_id, role')
+        .eq('user_id', userId);
+
+    if (assignError) {
+        console.error("Error fetching assignments", assignError);
+        return [];
+    }
+
+    if (!assignments || assignments.length === 0) return [];
+
+    const projectIds = assignments.map(a => a.project_id);
+
+    // 2. Fetch Projects details
+    const { data: projects, error: projError } = await supabase
+        .from('projects')
+        .select('*')
+        .in('id', projectIds)
+        .order('created_at', { ascending: false });
+        
+    if (projError) {
+        console.error("Error fetching assigned projects", projError);
+        return [];
+    }
+
+    return projects as Project[];
+};
+
+
 export const deleteProject = async (id: number): Promise<void> => {
     if (!supabase) throw new Error("Supabase not configured");
-    const { error } = await supabase
-        .from('projects')
-        .delete()
-        .eq('id', id);
+    const { error } = await supabase.from('projects').delete().eq('id', id);
     if (error) throw error;
 };
 
 export const uploadBudget = async (projectId: number, fileName: string, xmlContent: string) => {
     if (!supabase) throw new Error("Supabase not configured");
-    
-    const { error } = await supabase
-        .from('budgets')
-        .insert([{
+    const { error } = await supabase.from('budgets').insert([{
             project_id: projectId,
             version_name: fileName,
             xml_content: xmlContent
         }]);
-    
     if (error) throw error;
 };
 
@@ -251,63 +300,27 @@ export const uploadBudget = async (projectId: number, fileName: string, xmlConte
 
 export const fetchProjectAssignments = async (projectId: number): Promise<ProjectAssignment[]> => {
     if (!supabase) return [];
-    
     const { data, error } = await supabase
         .from('project_assignments')
-        .select(`
-            *,
-            profile:profiles(id, full_name, email)
-        `)
+        .select(`*, profile:profiles(id, full_name, email)`)
         .eq('project_id', projectId);
-        
-    if (error) {
-        console.error("Fetch Assignments Error:", error);
-        return [];
-    }
-    // Flatten the profile data
-    return data.map((item: any) => ({
-        ...item,
-        profile: item.profile
-    })) as ProjectAssignment[];
+    if (error) return [];
+    return data.map((item: any) => ({ ...item, profile: item.profile })) as ProjectAssignment[];
 };
 
-// Fetch ALL assignments for projects OWNED by the current user
-// This helps display "Line Producer" in the team list instead of generic "User"
 export const fetchAssignmentsForOwner = async (ownerId: string): Promise<any[]> => {
   if (!supabase) return [];
-  
-  // We want assignments where the linked project was created by `ownerId`
-  // This requires a join on projects.
   const { data, error } = await supabase
     .from('project_assignments')
-    .select(`
-      id,
-      user_id,
-      role,
-      project_id,
-      project:projects!inner(id, name, created_by)
-    `)
+    .select(`id, user_id, role, project_id, project:projects!inner(id, name, created_by)`)
     .eq('project.created_by', ownerId);
-
-  if (error) {
-    console.error("Fetch Owner Assignments Error:", error);
-    return [];
-  }
-  
+  if (error) return [];
   return data;
 };
 
 export const addProjectAssignment = async (projectId: number, userId: string, role: ProjectRole) => {
     if (!supabase) throw new Error("Supabase not configured");
-    
-    const { error } = await supabase
-        .from('project_assignments')
-        .insert([{
-            project_id: projectId,
-            user_id: userId,
-            role
-        }]);
-        
+    const { error } = await supabase.from('project_assignments').insert([{ project_id: projectId, user_id: userId, role }]);
     if (error) {
         if (error.code === '23505') throw new Error("User is already assigned to this project.");
         throw error;
@@ -316,12 +329,7 @@ export const addProjectAssignment = async (projectId: number, userId: string, ro
 
 export const removeProjectAssignment = async (assignmentId: number) => {
     if (!supabase) throw new Error("Supabase not configured");
-    
-    const { error } = await supabase
-        .from('project_assignments')
-        .delete()
-        .eq('id', assignmentId);
-        
+    const { error } = await supabase.from('project_assignments').delete().eq('id', assignmentId);
     if (error) throw error;
 };
 
@@ -329,26 +337,14 @@ export const removeProjectAssignment = async (assignmentId: number) => {
 
 export const fetchAllProfiles = async (): Promise<Profile[]> => {
   if (!supabase) return [];
-  const user = await getCurrentUser();
-  if (!user) return [];
-
-  // RLS will ensure I only see what I'm allowed to see
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .order('created_at', { ascending: false });
-  
+  const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
   if (error) throw error;
   return data as Profile[];
 };
 
 export const toggleUserDisabled = async (targetUserId: string, isDisabled: boolean) => {
   if (!supabase) return;
-  const { error } = await supabase
-    .from('profiles')
-    .update({ is_disabled: isDisabled })
-    .eq('id', targetUserId);
-  
+  const { error } = await supabase.from('profiles').update({ is_disabled: isDisabled }).eq('id', targetUserId);
   if (error) throw error;
 };
 
@@ -358,35 +354,19 @@ export const checkUserExistsGlobally = async (email: string): Promise<boolean> =
   if (!supabase) return false;
   try {
     const { data, error } = await supabase.rpc('check_email_exists_global', { target_email: email });
-    if (error) {
-      console.warn("Global email check failed, falling back to basic check:", error);
-      return checkUserExistsBasic(email);
-    }
+    if (error) return checkUserExistsBasic(email);
     return !!data;
   } catch (e) {
     return checkUserExistsBasic(email);
   }
 };
 
-// Internal fallback
 const checkUserExistsBasic = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
   const targetEmail = email.toLowerCase();
-  
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('id')
-    .ilike('email', targetEmail)
-    .maybeSingle();
+  const { data: profile } = await supabase.from('profiles').select('id').ilike('email', targetEmail).maybeSingle();
   if (profile) return true;
-
-  const { data: invite } = await supabase
-    .from('user_invitations')
-    .select('id')
-    .ilike('email', targetEmail)
-    .eq('status', 'pending')
-    .maybeSingle();
-
+  const { data: invite } = await supabase.from('user_invitations').select('id').ilike('email', targetEmail).eq('status', 'pending').maybeSingle();
   return !!invite;
 };
 
@@ -397,14 +377,10 @@ export const sendSystemInvitation = async (
     projectId?: number | null
 ) => {
   if (!supabase) throw new Error("Supabase not configured");
-
   const targetEmail = email.trim().toLowerCase();
-
-  // Use the robust global check
   if (await checkUserExistsGlobally(targetEmail)) {
     throw new Error("User with this email already exists in the system.");
   }
-
   const user = await getCurrentUser();
   if (!user) throw new Error("You must be logged in to invite users.");
 
@@ -418,26 +394,15 @@ export const sendSystemInvitation = async (
       target_role: projectRole || null,
       target_project_id: projectId || null
     }])
-    .select()
-    .single();
+    .select().single();
     
-  if (dbError) {
-    console.error("DB Insert Error:", dbError);
-    if (dbError.code === '42501') {
-       throw new Error("Permission denied. Check Admin Roles.");
-    }
-    throw new Error(`Failed to create invitation: ${dbError.message}`);
-  }
+  if (dbError) throw new Error(`Failed to create invitation: ${dbError.message}`);
 
   try {
     const { error: authError } = await supabase.auth.signInWithOtp({
       email: targetEmail,
-      options: {
-        shouldCreateUser: true,
-        emailRedirectTo: window.location.origin
-      }
+      options: { shouldCreateUser: true, emailRedirectTo: window.location.origin }
     });
-
     if (authError) {
       await deleteInvitation(inviteData.id);
       throw authError;
@@ -450,12 +415,7 @@ export const sendSystemInvitation = async (
 
 export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('user_invitations')
-    .select('*')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
-    
+  const { data, error } = await supabase.from('user_invitations').select('*').eq('status', 'pending').order('created_at', { ascending: false });
   if (error) throw error;
   return data as UserInvitation[];
 };
@@ -463,38 +423,20 @@ export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
 export const checkMyPendingInvitation = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
   const normalizedEmail = email.trim().toLowerCase();
-
-  const { data, error } = await supabase
-    .from('user_invitations')
-    .select('*')
-    .ilike('email', normalizedEmail) 
-    .eq('status', 'pending')
-    .maybeSingle();
-
-  if (error) {
-      console.warn("Check invitation error:", error.message);
-      return false;
-  }
+  const { data, error } = await supabase.from('user_invitations').select('*').ilike('email', normalizedEmail).eq('status', 'pending').maybeSingle();
+  if (error) return false;
   return !!data;
 };
 
 export const acceptInvitation = async (email: string) => {
   if (!supabase) return;
   const normalizedEmail = email.trim().toLowerCase();
-  
-  const { error } = await supabase
-    .from('user_invitations')
-    .update({ status: 'accepted' })
-    .ilike('email', normalizedEmail);
-    
+  const { error } = await supabase.from('user_invitations').update({ status: 'accepted' }).ilike('email', normalizedEmail);
   if (error) throw error;
 };
 
 export const deleteInvitation = async (id: number) => {
   if (!supabase) return;
-  const { error } = await supabase
-    .from('user_invitations')
-    .delete()
-    .eq('id', id);
+  const { error } = await supabase.from('user_invitations').delete().eq('id', id);
   if (error) throw error;
 };

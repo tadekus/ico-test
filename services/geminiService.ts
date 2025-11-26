@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { FileData, ExtractionResult } from "../types";
 
@@ -15,13 +16,16 @@ FIELDS TO EXTRACT:
 
 2. **Company Name**: 
    - Extract the full legal name of the supplier.
-   - Look for suffixes like "s.r.o.", "a.s.", "spol. s r.o.", "SE", etc.
 
 3. **Bank Details**:
    - Look for "Číslo účtu", "Účet", "Bankovní spojení".
    - Look for "IBAN".
 
-4. **Amounts & Currency**:
+4. **Payment Details**:
+   - **Variable Symbol (VS)**: Look for "Variabilní symbol", "VS". This is crucial.
+   - **Description**: Summarize "What is being invoiced" in 3-5 words (e.g., "Camera rental", "Catering services", "Location fee").
+
+5. **Amounts & Currency**:
    - **Total Amount (With VAT/DPH)**: Look for "Celkem k úhradě", "Částka celkem", "S DPH", "Total".
    - **Base Amount (Without VAT/DPH)**: Look for "Základ daně", "Bez DPH", "Netto".
    - **Currency**: Detect the currency (CZK, Kč, EUR, $, etc.).
@@ -47,6 +51,8 @@ export const extractIcoFromDocument = async (fileData: FileData): Promise<Extrac
       companyName: { type: Type.STRING, description: "The full legal name of the supplier company." },
       bankAccount: { type: Type.STRING, description: "Local bank account number." },
       iban: { type: Type.STRING, description: "International Bank Account Number (IBAN)." },
+      variableSymbol: { type: Type.STRING, description: "Variable symbol (VS) for payment." },
+      description: { type: Type.STRING, description: "Short description of the service or goods." },
       amountWithVat: { type: Type.NUMBER, description: "Total amount including VAT." },
       amountWithoutVat: { type: Type.NUMBER, description: "Amount excluding VAT (Tax Base)." },
       currency: { type: Type.STRING, description: "Currency code (e.g., CZK, EUR)." },
@@ -75,7 +81,7 @@ export const extractIcoFromDocument = async (fileData: FileData): Promise<Extrac
           }
         },
         {
-          text: "Extract IČO, Company Name, Bank Details, and Amounts from this invoice."
+          text: "Extract IČO, Company Name, Bank Details, VS, Description and Amounts from this invoice."
         }
       ];
     }

@@ -7,6 +7,8 @@ export interface ExtractionResult {
   amountWithVat?: number | null;
   amountWithoutVat?: number | null;
   currency?: string | null;
+  variableSymbol?: string | null;
+  description?: string | null;
   confidence: number;
   rawText?: string;
 }
@@ -14,10 +16,13 @@ export interface ExtractionResult {
 export interface SavedInvoice {
   id: number;
   created_at: string;
+  internal_id?: number | null; // Project specific sequence number (1, 2, 3...)
   ico: string | null;
   company_name: string | null;
   bank_account: string | null;
   iban: string | null;
+  variable_symbol?: string | null;
+  description?: string | null;
   amount_with_vat: number | null;
   amount_without_vat: number | null;
   currency: string | null;
@@ -28,11 +33,15 @@ export interface SavedInvoice {
 }
 
 export interface FileData {
+  id: string; // Unique ID for UI handling
   file: File;
   preview?: string;
   base64?: string;
   textContent?: string;
   type: 'pdf' | 'excel' | 'image';
+  status: 'uploading' | 'analyzing' | 'ready' | 'saved' | 'error';
+  extractionResult?: ExtractionResult | null;
+  error?: string;
 }
 
 // --- USER MANAGEMENT ---
@@ -78,6 +87,7 @@ export interface ProjectAssignment {
   user_id: string;
   role: ProjectRole;
   profile?: Profile; // Joined data
+  project?: Project; // Joined data
 }
 
 export interface UserInvitation {

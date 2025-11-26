@@ -1,7 +1,8 @@
+
 import { FileData } from '../types';
 import * as XLSX from 'xlsx';
 
-export const readFile = (file: File): Promise<FileData> => {
+export const readFile = (file: File): Promise<Omit<FileData, 'id' | 'status'>> => {
   return new Promise((resolve, reject) => {
     const fileType = file.name.toLowerCase().endsWith('.pdf')
       ? 'pdf'
@@ -12,7 +13,12 @@ export const readFile = (file: File): Promise<FileData> => {
     const reader = new FileReader();
 
     reader.onload = async (e) => {
-      const result = e.target?.result as string; // Base64 string
+      if (!e.target?.result) {
+        reject(new Error("Failed to read file"));
+        return;
+      }
+      
+      const result = e.target.result as string; // Base64 string from readAsDataURL
       const base64Data = result.split(',')[1];
 
       if (fileType === 'excel') {
@@ -20,7 +26,7 @@ export const readFile = (file: File): Promise<FileData> => {
           const excelText = await parseExcel(file);
           resolve({
             file,
-            type: fileType,
+            type: 'excel',
             base64: base64Data, // Still keep base64 just in case
             textContent: excelText
           });
@@ -30,7 +36,7 @@ export const readFile = (file: File): Promise<FileData> => {
       } else {
         resolve({
           file,
-          type: fileType,
+          type: fileType as 'pdf' | 'image',
           base64: base64Data,
           preview: fileType === 'image' ? result : undefined
         });
@@ -47,7 +53,11 @@ const parseExcel = (file: File): Promise<string> => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const data = e.target?.result;
+        if (!e.target?.result) {
+           reject(new Error("Failed to read Excel data"));
+           return;
+        }
+        const data = e.target.result as string;
         const workbook = XLSX.read(data, { type: 'binary' });
         let combinedText = "Document Content (Excel Export):\n";
 

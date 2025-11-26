@@ -1,9 +1,11 @@
+
 import React, { useCallback, useState } from 'react';
 import { FileData } from '../types';
 import { readFile } from '../utils/fileUtils';
+import { v4 as uuidv4 } from 'uuid'; // Simple UUID generator or custom function needed
 
 interface DropzoneProps {
-  onFileLoaded: (data: FileData) => void;
+  onFileLoaded: (data: FileData[]) => void;
   disabled?: boolean;
 }
 
@@ -21,22 +23,41 @@ const Dropzone: React.FC<DropzoneProps> = ({ onFileLoaded, disabled }) => {
     setIsDragging(false);
   }, []);
 
-  const processFile = async (file: File) => {
+  const processFiles = async (files: FileList) => {
     setError(null);
     const validExtensions = ['pdf', 'xlsx', 'xls', 'csv', 'png', 'jpg', 'jpeg'];
-    const ext = file.name.split('.').pop()?.toLowerCase();
+    
+    const processedFiles: FileData[] = [];
+    const errors: string[] = [];
 
-    if (!ext || !validExtensions.includes(ext)) {
-      setError("Unsupported file type. Please upload PDF, Excel, or Image.");
-      return;
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const ext = file.name.split('.').pop()?.toLowerCase();
+
+        if (!ext || !validExtensions.includes(ext)) {
+            errors.push(`${file.name}: Unsupported file type.`);
+            continue;
+        }
+
+        try {
+            const fileDataRaw = await readFile(file);
+            processedFiles.push({
+                ...fileDataRaw,
+                id: Math.random().toString(36).substring(2, 9), // Temp ID
+                status: 'uploading'
+            });
+        } catch (err) {
+            console.error(err);
+            errors.push(`${file.name}: Failed to read.`);
+        }
     }
 
-    try {
-      const fileData = await readFile(file);
-      onFileLoaded(fileData);
-    } catch (err) {
-      console.error(err);
-      setError("Failed to read file.");
+    if (errors.length > 0) {
+        setError(errors.join(' '));
+    }
+
+    if (processedFiles.length > 0) {
+        onFileLoaded(processedFiles);
     }
   };
 
@@ -46,13 +67,13 @@ const Dropzone: React.FC<DropzoneProps> = ({ onFileLoaded, disabled }) => {
     if (disabled) return;
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processFile(e.dataTransfer.files[0]);
+      processFiles(e.dataTransfer.files);
     }
   }, [disabled, onFileLoaded]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      processFile(e.target.files[0]);
+      processFiles(e.target.files);
     }
   };
 
@@ -76,6 +97,7 @@ const Dropzone: React.FC<DropzoneProps> = ({ onFileLoaded, disabled }) => {
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
           onChange={handleInputChange}
           disabled={disabled}
+          multiple
           accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg"
         />
         
@@ -87,10 +109,10 @@ const Dropzone: React.FC<DropzoneProps> = ({ onFileLoaded, disabled }) => {
           </div>
           <div>
             <p className="text-lg font-medium text-slate-700">
-              {isDragging ? "Drop document here" : "Click to upload or drag and drop"}
+              {isDragging ? "Drop documents here" : "Drag & drop invoices"}
             </p>
             <p className="text-sm text-slate-500 mt-1">
-              Supports PDF, Excel (.xlsx), or Images
+              Upload multiple PDF or Excel files
             </p>
           </div>
         </div>
