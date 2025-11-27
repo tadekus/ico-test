@@ -263,13 +263,17 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 </div>
                 
                 {/* Summary Footer */}
-                <div className="pt-2 border-t border-slate-200 flex justify-between items-center text-xs">
-                    <div className="flex flex-col">
-                        <span className="text-[9px] text-slate-400 uppercase">Allocated</span>
+                <div className="pt-2 border-t border-slate-200 text-xs space-y-1">
+                    <div className="flex justify-between items-center">
+                        <span className="text-[9px] text-slate-400 uppercase">Total Allocated</span>
                         <span className="font-mono font-bold text-slate-700">{formatCurrency(totalAllocated)}</span>
                     </div>
-                    <div className="flex flex-col text-right">
-                        <span className="text-[9px] text-slate-400 uppercase">Unallocated</span>
+                    <div className="flex justify-between items-center">
+                        <span className="text-[9px] text-slate-400 uppercase">Invoice Amount</span>
+                        <span className="font-mono font-bold text-slate-700">{formatCurrency(invoiceTotal)}</span>
+                    </div>
+                    <div className="flex justify-between items-center pt-1 border-t border-slate-100 mt-1">
+                        <span className="text-[9px] text-slate-400 uppercase font-bold">Unallocated</span>
                         <span className={`font-mono font-bold ${Math.abs(unallocated) > 1 ? (unallocated < 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-300'}`}>
                             {formatCurrency(unallocated)}
                         </span>
