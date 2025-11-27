@@ -38,6 +38,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setAllocationSearch('');
     setSuggestedLines([]);
     setHasAutoSelected(false);
+    setAllocationAmount(0); // Ensure amount resets
     
     // Load Budget Data & Vendor History
     if (project) {
@@ -48,17 +49,17 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             fetchVendorBudgetHistory(project.id, invoice.ico).then(history => {
                 setSuggestedLines(history);
                 // AUTO SELECT: If we found history and haven't allocated anything yet
-                if (history.length > 0 && !hasAutoSelected) {
+                if (history.length > 0 && allocations.length === 0) {
                     setSelectedBudgetLine(history[0]);
                     setAllocationSearch(`${history[0].account_number} - ${history[0].account_description}`);
-                    // Explicitly NOT setting amount, user must verify
+                    // Explicitly set amount to 0 so user must verify
                     setAllocationAmount(0); 
                     setHasAutoSelected(true);
                 }
             }).catch(console.error);
         }
     }
-  }, [invoice.id, project?.id, invoice.ico]);
+  }, [invoice.id, project?.id, invoice.ico]); // Added allocations length dep logic via hasAutoSelected if needed, but better inside history fetch
 
   useEffect(() => {
     if (fileData.extractionResult) {
@@ -262,7 +263,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 </div>
 
                 {/* --- SMART SUGGESTIONS --- */}
-                {suggestedLines.length > 0 && allocations.length === 0 && (
+                {suggestedLines.length > 0 && allocations.length === 0 && !hasAutoSelected && (
                     <div className="mb-3">
                         <label className="text-[9px] font-bold text-slate-400 uppercase mb-1 block">Suggested for this Supplier</label>
                         <div className="space-y-1">

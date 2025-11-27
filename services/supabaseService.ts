@@ -146,20 +146,21 @@ export const checkDuplicateInvoice = async (projectId: number, ico: string | nul
 
     const cleanIco = normalizeIco(ico);
 
+    // Using limit(1) instead of maybeSingle() to prevent errors if duplicates already exist
     const { data, error } = await supabase
         .from('invoices')
         .select('id')
         .eq('project_id', projectId)
-        .eq('ico', cleanIco)
+        .eq('ico', cleanIco) // Using normalized IČO
         .eq('variable_symbol', variableSymbol)
-        .maybeSingle(); // Returns null if not found, instead of throwing
+        .limit(1); 
 
     if (error) {
         console.error("Error checking for duplicate:", error);
         return false;
     }
 
-    return !!data;
+    return data && data.length > 0;
 };
 
 export const saveExtractionResult = async (
@@ -178,6 +179,8 @@ export const saveExtractionResult = async (
       internalId = await getNextInvoiceId(projectId);
   }
 
+  const normalizedIco = normalizeIco(result.ico);
+
   const { data, error } = await supabase
     .from('invoices')
     .insert([
@@ -185,7 +188,7 @@ export const saveExtractionResult = async (
         user_id: user.id,
         project_id: projectId || null,
         internal_id: internalId,
-        ico: normalizeIco(result.ico), // Save normalized IČO
+        ico: normalizedIco, // Save normalized IČO
         company_name: result.companyName,
         bank_account: result.bankAccount,
         iban: result.iban,
