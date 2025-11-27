@@ -151,7 +151,8 @@ export const checkDuplicateInvoice = async (
     if (!supabase || !ico) return false;
 
     const cleanIco = normalizeIco(ico);
-    const cleanVs = variableSymbol ? variableSymbol.trim() : null;
+    // Remove ALL whitespace from VS for comparison (not just trim)
+    const cleanVs = variableSymbol ? variableSymbol.replace(/\s/g, '') : null;
 
     console.log(`Checking Duplicate: Project=${projectId}, Ico=${cleanIco}, VS=${cleanVs}, Amount=${amount}`);
 
@@ -166,7 +167,7 @@ export const checkDuplicateInvoice = async (
 
     // Filter logic
     if (cleanVs) {
-       // Strong Match: IČO + VS
+       // Strong Match: IČO + VS (Checking against normalized DB data)
        query = query.eq('variable_symbol', cleanVs);
     } else if (amount) {
        // Fallback Match: IČO + Amount (if VS missing)
@@ -176,7 +177,7 @@ export const checkDuplicateInvoice = async (
        return false;
     }
 
-    const { data, error } = await query;
+    const { data, error } = await query.limit(1);
 
     if (error) {
         console.error("Duplicate Check Error:", error);
@@ -205,6 +206,7 @@ export const saveExtractionResult = async (
   }
 
   const normalizedIco = normalizeIco(result.ico);
+  const normalizedVs = result.variableSymbol ? result.variableSymbol.replace(/\s/g, '') : null;
 
   const { data, error } = await supabase
     .from('invoices')
@@ -217,7 +219,7 @@ export const saveExtractionResult = async (
         company_name: result.companyName,
         bank_account: result.bankAccount,
         iban: result.iban,
-        variable_symbol: result.variableSymbol ? result.variableSymbol.trim() : null,
+        variable_symbol: normalizedVs, // Save normalized VS
         description: result.description,
         amount_with_vat: result.amountWithVat,
         amount_without_vat: result.amountWithoutVat,
@@ -248,7 +250,7 @@ export const updateInvoice = async (
         finalUpdates.ico = normalizeIco(finalUpdates.ico);
     }
     if (finalUpdates.variable_symbol) {
-        finalUpdates.variable_symbol = finalUpdates.variable_symbol.trim();
+        finalUpdates.variable_symbol = finalUpdates.variable_symbol.replace(/\s/g, '');
     }
 
     const { data, error } = await supabase
@@ -505,6 +507,7 @@ export const fetchVendorBudgetHistory = async (projectId: number, ico: string): 
 
     try {
         // 1. Get IDs of past invoices from this vendor in this project
+        // Note: RLS must allow reading these invoices
         const { data: invoices, error: invError } = await supabase
             .from('invoices')
             .select('id')

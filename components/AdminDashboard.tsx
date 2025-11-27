@@ -331,25 +331,54 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V28: AGGRESSIVE DATA NORMALIZATION ===
+-- === REPAIR V29: VISIBILITY FIXES ===
 
--- 1. Create Index for performance
-CREATE INDEX IF NOT EXISTS idx_invoices_ico ON invoices(ico);
-
--- 2. Normalize IČO in database (Strip everything except 0-9)
+-- 1. Normalize Variable Symbols (Remove spaces to ensure matching)
 UPDATE invoices 
-SET ico = REGEXP_REPLACE(ico, '[^0-9]', '', 'g')
-WHERE ico IS NOT NULL;
-
--- 3. Normalize Variable Symbols (Trim spaces)
-UPDATE invoices
-SET variable_symbol = TRIM(variable_symbol)
+SET variable_symbol = REGEXP_REPLACE(variable_symbol, '[^a-zA-Z0-9]', '', 'g')
 WHERE variable_symbol IS NOT NULL;
 
--- 4. Verify Permissions
-GRANT ALL ON TABLE invoices TO authenticated;
-GRANT ALL ON TABLE invoice_allocations TO authenticated;
-GRANT ALL ON TABLE budget_lines TO authenticated;
+-- 2. Open Read Access for Team Members (Invoices)
+-- Allows Line Producers to see existing invoices for duplicate checks/history
+DROP POLICY IF EXISTS "Team Read Invoices" ON invoices;
+CREATE POLICY "Team Read Invoices" ON invoices FOR SELECT TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM project_assignments
+    WHERE project_assignments.project_id = invoices.project_id
+    AND project_assignments.user_id = auth.uid()
+  )
+  OR
+  -- Also allow Project Owners (Superusers)
+  EXISTS (
+    SELECT 1 FROM projects
+    WHERE projects.id = invoices.project_id
+    AND projects.created_by = auth.uid()
+  )
+);
+
+-- 3. Open Read Access for Allocations (For History)
+DROP POLICY IF EXISTS "Team Read Allocations" ON invoice_allocations;
+CREATE POLICY "Team Read Allocations" ON invoice_allocations FOR SELECT TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM invoices
+    JOIN project_assignments ON project_assignments.project_id = invoices.project_id
+    WHERE invoices.id = invoice_allocations.invoice_id
+    AND project_assignments.user_id = auth.uid()
+  )
+);
+
+-- 4. Re-Apply Insert Permissions just in case
+DROP POLICY IF EXISTS "Team Insert Invoices" ON invoices;
+CREATE POLICY "Team Insert Invoices" ON invoices FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM project_assignments
+    WHERE project_assignments.project_id = invoices.project_id
+    AND project_assignments.user_id = auth.uid()
+  )
+);
 `;
 
   const pendingSystemInvites = invitations.filter(inv => inv.target_app_role === 'admin' || inv.target_app_role === 'superuser');
