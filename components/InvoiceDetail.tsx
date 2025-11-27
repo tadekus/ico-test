@@ -22,6 +22,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const [allocations, setAllocations] = useState<InvoiceAllocation[]>([]);
   const [allocationSearch, setAllocationSearch] = useState('');
   const [allocationAmount, setAllocationAmount] = useState<number>(0);
+  const [selectedBudgetLine, setSelectedBudgetLine] = useState<BudgetLine | null>(null);
   const [isAllocating, setIsAllocating] = useState(false);
 
   // RESET BUTTON STATE when loading a new invoice (e.g. auto-advance)
@@ -29,6 +30,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setSaveStatus('idle');
     setErrorMessage(null);
     setAllocations([]);
+    setSelectedBudgetLine(null);
+    setAllocationSearch('');
     
     // Load Budget Data
     if (project) {
@@ -40,10 +43,6 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   useEffect(() => {
     if (fileData.extractionResult) {
       setEditedResult(fileData.extractionResult);
-      // Default allocation amount to total amount (without VAT preferably, usually Cost)
-      if (fileData.extractionResult.amountWithoutVat) {
-          setAllocationAmount(fileData.extractionResult.amountWithoutVat);
-      }
     }
   }, [fileData]);
 
@@ -89,14 +88,29 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setEditedResult(prev => prev ? ({ ...prev, [field]: value }) : null);
   };
 
-  const handleAddAllocation = async (budgetLineId: number) => {
+  const handleSelectBudgetLine = (line: BudgetLine) => {
+      setSelectedBudgetLine(line);
+      setAllocationSearch(`${line.account_number} - ${line.account_description}`);
+      
+      // Auto-fill with remaining amount if possible
+      const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
+      const invoiceTotal = editedResult?.amountWithoutVat || 0;
+      const remaining = Math.max(0, invoiceTotal - totalAllocated);
+      setAllocationAmount(remaining > 0 ? remaining : 0);
+  };
+
+  const handleConfirmAllocation = async () => {
+      if (!selectedBudgetLine || allocationAmount <= 0) return;
       setIsAllocating(true);
       try {
-          await saveInvoiceAllocation(invoice.id, budgetLineId, allocationAmount);
+          await saveInvoiceAllocation(invoice.id, selectedBudgetLine.id, allocationAmount);
           // Refresh
           const updated = await fetchInvoiceAllocations(invoice.id);
           setAllocations(updated);
-          setAllocationSearch(''); // Clear search
+          // Reset Selection
+          setSelectedBudgetLine(null);
+          setAllocationSearch('');
+          setAllocationAmount(0);
       } catch (err) {
           alert("Failed to allocate budget line");
       } finally {
@@ -116,7 +130,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   // Helper to determine input style (Red background if empty/null)
   const getInputClass = (value: string | number | null | undefined) => {
       const isMissing = value === null || value === undefined || value === '' || (typeof value === 'number' && isNaN(value));
-      return `w-full px-2 py-1.5 border rounded text-sm outline-none transition-colors ${
+      return `w-full px-2 py-1 border rounded text-xs outline-none transition-colors ${
           isMissing 
             ? 'bg-red-50 border-red-300 focus:border-red-500 text-red-900 placeholder-red-300' 
             : 'bg-white border-slate-300 focus:border-indigo-500 text-slate-900'
@@ -125,47 +139,147 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   
   const getNumberInputClass = (value: number | null | undefined) => {
       const isMissing = value === null || value === undefined || isNaN(value);
-      return `w-full px-2 py-1.5 border rounded text-sm font-mono text-right outline-none transition-colors ${
+      return `w-full px-2 py-1 border rounded text-xs font-mono text-right outline-none transition-colors ${
           isMissing 
             ? 'bg-red-50 border-red-300 focus:border-red-500 text-red-900' 
             : 'bg-white border-slate-300 focus:border-indigo-500 text-slate-900'
       }`;
   };
 
+  const formatCurrency = (amount: number) => {
+      return new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount);
+  };
+
   // Filter budget lines for search
-  const filteredBudgetLines = allocationSearch 
+  const filteredBudgetLines = allocationSearch && !selectedBudgetLine
     ? budgetLines.filter(l => 
         l.account_number.toLowerCase().includes(allocationSearch.toLowerCase()) || 
         l.account_description.toLowerCase().includes(allocationSearch.toLowerCase()) ||
         l.category_description.toLowerCase().includes(allocationSearch.toLowerCase())
-      ).slice(0, 10) // Limit results
+      ).slice(0, 20) // Limit results
     : [];
 
+  const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
+  const invoiceTotal = editedResult?.amountWithoutVat || 0;
+  const unallocated = invoiceTotal - totalAllocated;
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-140px)]">
+    <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 h-[calc(100vh-140px)]">
       
-      {/* LEFT: DATA ENTRY (Narrower) */}
-      <div className="lg:col-span-1 bg-white rounded-xl shadow-xl border border-slate-200 flex flex-col h-full overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-xl shrink-0">
-           <button onClick={onBack} className="text-slate-500 hover:text-indigo-600 text-sm flex items-center gap-1 font-medium">
+      {/* LEFT: DATA ENTRY (Wider 40%) */}
+      <div className="lg:col-span-2 bg-white rounded-xl shadow-xl border border-slate-200 flex flex-col h-full overflow-hidden">
+        <div className="p-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-xl shrink-0">
+           <button onClick={onBack} className="text-slate-500 hover:text-indigo-600 text-xs flex items-center gap-1 font-medium">
              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
              </svg>
              Back
            </button>
-           <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wide">Invoice Data #{invoice.internal_id}</h2>
+           <div className="text-xs text-slate-500 font-mono">Invoice #{invoice.internal_id}</div>
         </div>
 
         <div className="p-4 overflow-y-auto flex-1 space-y-4">
-            {/* Status Info */}
-            <div className="bg-indigo-50 p-3 rounded-lg text-xs text-indigo-800 mb-2">
-                <div className="font-semibold">Project: {project?.name}</div>
-                <div>Status: <span className="uppercase font-bold">{invoice.status}</span></div>
+            
+            {/* --- BUDGET ALLOCATION SECTION (Moved to Top) --- */}
+            <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 shadow-sm">
+                <div className="flex justify-between items-center mb-3">
+                    <label className="text-[10px] font-bold text-indigo-600 uppercase tracking-wide">Budget Allocation</label>
+                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+                        {allocations.length} items
+                    </span>
+                </div>
+                
+                {/* Search & Add Row */}
+                <div className="flex gap-2 mb-2 relative">
+                    <div className="flex-1 relative">
+                        <input 
+                            type="text" 
+                            placeholder="Search budget line..."
+                            value={allocationSearch}
+                            onChange={e => {
+                                setAllocationSearch(e.target.value);
+                                setSelectedBudgetLine(null); 
+                            }}
+                            className="w-full text-xs px-2 py-1.5 border rounded outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                        {/* Dropdown */}
+                        {filteredBudgetLines.length > 0 && (
+                            <div className="absolute top-full left-0 w-full bg-white border shadow-xl rounded-lg mt-1 max-h-48 overflow-auto z-50 text-xs divide-y divide-slate-50">
+                                {filteredBudgetLines.map(line => (
+                                    <div 
+                                        key={line.id} 
+                                        className="p-2 hover:bg-indigo-50 cursor-pointer flex justify-between items-center group"
+                                        onClick={() => handleSelectBudgetLine(line)}
+                                    >
+                                        <div className="overflow-hidden pr-2">
+                                            <div className="font-bold text-indigo-700 truncate">
+                                                <span className="font-mono mr-2 opacity-80">{line.account_number}</span>
+                                                {line.account_description}
+                                            </div>
+                                            <div className="text-[9px] text-slate-400 truncate">{line.category_description}</div>
+                                        </div>
+                                        <div className="font-mono text-slate-500 whitespace-nowrap text-[10px] bg-slate-50 px-1.5 py-0.5 rounded group-hover:bg-white">
+                                            {formatCurrency(line.original_amount)}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    <input 
+                        type="number"
+                        value={allocationAmount}
+                        onChange={e => setAllocationAmount(parseFloat(e.target.value))}
+                        className="w-20 text-xs px-2 py-1.5 border rounded text-right outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                    <button 
+                        onClick={handleConfirmAllocation}
+                        disabled={!selectedBudgetLine || allocationAmount <= 0 || isAllocating}
+                        className="bg-indigo-600 text-white px-3 py-1.5 rounded text-xs font-medium disabled:opacity-50 hover:bg-indigo-700 transition-colors"
+                    >
+                        Add
+                    </button>
+                </div>
+
+                {/* Allocations List */}
+                <div className="space-y-1 max-h-32 overflow-y-auto mb-2">
+                    {allocations.map(alloc => (
+                        <div key={alloc.id} className="flex justify-between items-center text-xs bg-white border border-slate-200 p-1.5 rounded">
+                            <div className="flex-1 min-w-0">
+                                <span className="font-mono font-bold text-indigo-600 mr-2 text-[10px]">{alloc.budget_line?.account_number}</span>
+                                <span className="truncate text-slate-700">{alloc.budget_line?.account_description}</span>
+                            </div>
+                            <div className="flex items-center gap-3 ml-2">
+                                <span className="font-mono font-medium">{formatCurrency(alloc.amount)}</span>
+                                <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-[10px]">✕</button>
+                            </div>
+                        </div>
+                    ))}
+                    {allocations.length === 0 && (
+                        <div className="text-center text-[10px] text-slate-400 py-2 italic border border-dashed border-slate-200 rounded">
+                            No budget lines assigned
+                        </div>
+                    )}
+                </div>
+                
+                {/* Summary Footer */}
+                <div className="pt-2 border-t border-slate-200 flex justify-between items-center text-xs">
+                    <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-400 uppercase">Allocated</span>
+                        <span className="font-mono font-bold text-slate-700">{formatCurrency(totalAllocated)}</span>
+                    </div>
+                    <div className="flex flex-col text-right">
+                        <span className="text-[9px] text-slate-400 uppercase">Unallocated</span>
+                        <span className={`font-mono font-bold ${Math.abs(unallocated) > 1 ? (unallocated < 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-300'}`}>
+                            {formatCurrency(unallocated)}
+                        </span>
+                    </div>
+                </div>
             </div>
 
-            {/* Form Fields - Compact, Line by Line */}
+            {/* --- COMPACT DATA ENTRY --- */}
             <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Supplier</label>
+                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Supplier</label>
                 <input 
                   type="text" 
                   value={editedResult.companyName || ''} 
@@ -177,7 +291,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             
             <div className="grid grid-cols-2 gap-2">
                 <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">IČO</label>
+                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">IČO</label>
                     <input 
                       type="text" 
                       value={editedResult.ico || ''} 
@@ -187,7 +301,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                     />
                 </div>
                 <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Var. Symbol</label>
+                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Var. Symbol</label>
                     <input 
                       type="text" 
                       value={editedResult.variableSymbol || ''} 
@@ -199,18 +313,18 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             </div>
 
             <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Description</label>
+                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Description</label>
                 <textarea 
                   value={editedResult.description || ''} 
                   onChange={e => handleInputChange('description', e.target.value)}
-                  className={`${getInputClass(editedResult.description)} h-16 resize-none`} 
+                  className={`${getInputClass(editedResult.description)} h-14 resize-none`} 
                   placeholder="Missing Description"
                 />
             </div>
 
             <div className="grid grid-cols-2 gap-2">
                 <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Excl. VAT</label>
+                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Excl. VAT (Base)</label>
                     <input 
                       type="number" 
                       value={editedResult.amountWithoutVat || ''} 
@@ -219,7 +333,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                     />
                 </div>
                 <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Incl. VAT</label>
+                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Incl. VAT (Total)</label>
                     <input 
                       type="number" 
                       value={editedResult.amountWithVat || ''} 
@@ -229,100 +343,48 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 </div>
             </div>
             
-            <div className="grid grid-cols-2 gap-2">
-                <div>
-                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Currency</label>
+            <div>
+                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Bank Account</label>
+                <div className="grid grid-cols-1 gap-1">
+                    <input 
+                      type="text" 
+                      value={editedResult.bankAccount || ''} 
+                      onChange={e => handleInputChange('bankAccount', e.target.value)}
+                      className={`${getInputClass(editedResult.bankAccount)} font-mono text-[10px]`} 
+                      placeholder="Local Account"
+                    />
+                    <input 
+                      type="text" 
+                      value={editedResult.iban || ''} 
+                      onChange={e => handleInputChange('iban', e.target.value)}
+                      className={`${getInputClass(editedResult.iban)} font-mono text-[10px]`} 
+                      placeholder="IBAN"
+                    />
+                </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-2 pt-2">
+                 <div>
+                     <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Currency</label>
                      <input 
                        type="text" 
                        value={editedResult.currency || 'CZK'} 
                        onChange={e => handleInputChange('currency', e.target.value)}
-                       className={`${getInputClass(editedResult.currency)} font-mono uppercase`} 
+                       className={`${getInputClass(editedResult.currency)} font-mono uppercase text-center`} 
                      />
                 </div>
-            </div>
-
-            <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Bank Account</label>
-                <input 
-                  type="text" 
-                  value={editedResult.bankAccount || ''} 
-                  onChange={e => handleInputChange('bankAccount', e.target.value)}
-                  className={`${getInputClass(editedResult.bankAccount)} font-mono mb-1`} 
-                  placeholder="Local Account"
-                />
-                <input 
-                  type="text" 
-                  value={editedResult.iban || ''} 
-                  onChange={e => handleInputChange('iban', e.target.value)}
-                  className={`${getInputClass(editedResult.iban)} font-mono`} 
-                  placeholder="IBAN"
-                />
-            </div>
-
-            {/* --- BUDGET ALLOCATION SECTION --- */}
-            <div className="border-t border-slate-100 pt-4 mt-2">
-                <label className="block text-[10px] font-bold text-indigo-500 uppercase mb-2">Budget Allocation</label>
-                
-                {/* Search & Add */}
-                <div className="bg-slate-50 p-2 rounded border border-slate-200 mb-2">
-                    <div className="mb-2">
-                        <input 
-                            type="text" 
-                            placeholder="Search budget line (0101...)"
-                            value={allocationSearch}
-                            onChange={e => setAllocationSearch(e.target.value)}
-                            className="w-full text-xs px-2 py-1.5 border rounded outline-none"
-                        />
-                        {allocationSearch && filteredBudgetLines.length > 0 && (
-                            <div className="absolute bg-white border shadow-lg rounded mt-1 w-64 max-h-40 overflow-auto z-50 text-xs">
-                                {filteredBudgetLines.map(line => (
-                                    <div 
-                                        key={line.id} 
-                                        className="p-2 hover:bg-indigo-50 cursor-pointer border-b border-slate-50"
-                                        onClick={() => handleAddAllocation(line.id)}
-                                    >
-                                        <div className="font-bold text-indigo-700">{line.account_number}</div>
-                                        <div className="truncate">{line.account_description}</div>
-                                        <div className="text-[10px] text-slate-400">{line.category_description}</div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <input 
-                            type="number"
-                            value={allocationAmount}
-                            onChange={e => setAllocationAmount(parseFloat(e.target.value))}
-                            className="w-24 text-xs px-2 py-1.5 border rounded text-right"
-                        />
-                        <span className="text-xs text-slate-400">Allocated Amount</span>
+                <div>
+                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Status</label>
+                    <div className="w-full px-2 py-1 border border-slate-200 bg-slate-50 rounded text-xs font-bold uppercase text-center text-slate-600">
+                        {invoice.status}
                     </div>
                 </div>
-
-                {/* List of Allocations */}
-                <div className="space-y-1">
-                    {allocations.map(alloc => (
-                        <div key={alloc.id} className="flex justify-between items-center text-xs bg-white border border-slate-200 p-2 rounded">
-                            <div className="flex-1 min-w-0">
-                                <span className="font-mono font-bold text-indigo-600 mr-2">{alloc.budget_line?.account_number}</span>
-                                <span className="truncate block text-slate-600">{alloc.budget_line?.account_description}</span>
-                            </div>
-                            <div className="flex items-center gap-2 ml-2">
-                                <span className="font-mono">{alloc.amount.toFixed(0)}</span>
-                                <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-red-400 hover:text-red-600">×</button>
-                            </div>
-                        </div>
-                    ))}
-                    {allocations.length === 0 && (
-                        <div className="text-center text-[10px] text-slate-400 py-2 italic">No budget lines assigned</div>
-                    )}
-                </div>
             </div>
+
         </div>
 
-        <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-xl shrink-0">
-            {errorMessage && <div className="text-red-500 text-xs mb-2">{errorMessage}</div>}
+        <div className="p-3 border-t border-slate-100 bg-slate-50 rounded-b-xl shrink-0">
+            {errorMessage && <div className="text-red-500 text-xs mb-2 text-center">{errorMessage}</div>}
             <button 
                onClick={handleApprove}
                disabled={saveStatus === 'saving' || saveStatus === 'success'}
@@ -334,18 +396,18 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved' : (isReapproving ? 'Re-approve Invoice' : 'Approve Invoice')}
             </button>
             {nextDraftId && saveStatus !== 'success' && (
-                <div className="text-center text-[10px] text-slate-400 mt-2">
-                    Next invoice will load automatically
+                <div className="text-center text-[9px] text-slate-400 mt-2">
+                    Auto-advance enabled
                 </div>
             )}
         </div>
       </div>
 
-      {/* RIGHT: PREVIEW (Wider) */}
-      <div className="lg:col-span-2 bg-slate-800 rounded-xl overflow-hidden flex flex-col h-full shadow-2xl">
-        <div className="bg-slate-900 p-2 text-slate-400 text-xs flex justify-between items-center px-4">
+      {/* RIGHT: PREVIEW (Wider 60%) */}
+      <div className="lg:col-span-3 bg-slate-800 rounded-xl overflow-hidden flex flex-col h-full shadow-2xl border border-slate-700">
+        <div className="bg-slate-900 p-2 text-slate-400 text-xs flex justify-between items-center px-4 shrink-0">
              <span className="font-mono">Document Preview</span>
-             <span className="uppercase bg-slate-700 px-2 py-0.5 rounded text-[10px]">{fileData.type}</span>
+             <span className="uppercase bg-slate-700 px-2 py-0.5 rounded text-[10px] font-bold text-slate-300">{fileData.type}</span>
         </div>
         <div className="flex-1 bg-slate-200 overflow-auto relative flex items-center justify-center p-4">
            {fileData.type === 'image' && fileData.preview && (

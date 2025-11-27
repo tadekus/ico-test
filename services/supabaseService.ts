@@ -348,25 +348,33 @@ export const deleteProject = async (id: number): Promise<void> => {
 export const uploadBudget = async (projectId: number, fileName: string, xmlContent: string) => {
     if (!supabase) throw new Error("Supabase not configured");
     
-    // 1. Parse XML to lines
+    // 1. Check existing budgets to determine active state
+    const { count } = await supabase
+        .from('budgets')
+        .select('*', { count: 'exact', head: true })
+        .eq('project_id', projectId);
+
+    const shouldBeActive = count === 0;
+
+    // 2. Parse XML to lines
     const lines = parseBudgetXml(xmlContent);
     if (lines.length === 0) throw new Error("No valid budget lines found in XML.");
 
-    // 2. Create Budget Record
+    // 3. Create Budget Record
     const { data: budgetData, error: budgetError } = await supabase
         .from('budgets')
         .insert([{
             project_id: projectId,
             version_name: fileName,
             xml_content: xmlContent,
-            is_active: false // Default to inactive
+            is_active: shouldBeActive 
         }])
         .select()
         .single();
 
     if (budgetError) throw budgetError;
     
-    // 3. Bulk Insert Lines
+    // 4. Bulk Insert Lines
     const budgetLinesPayload = lines.map(line => ({
         budget_id: budgetData.id,
         ...line

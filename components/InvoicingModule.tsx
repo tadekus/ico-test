@@ -25,29 +25,33 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
   // Track last project ID to prevent redundant re-fetching on focus/renders
   const lastLoadedProjectId = useRef<number | null>(null);
 
+  // EFFECT 1: Handle Project Switching (Fetching Invoices & Resetting View)
   useEffect(() => {
-    if (currentProject) {
-      // Load Budgets for the active project
-      if(currentProject.budgets) {
+    if (currentProject && currentProject.id !== lastLoadedProjectId.current) {
+        lastLoadedProjectId.current = currentProject.id;
+        
+        setLoadingHistory(true);
+        fetchInvoices(currentProject.id)
+            .then(setSavedInvoices)
+            .catch(console.error)
+            .finally(() => setLoadingHistory(false));
+        
+        setStagedFiles([]);
+        setViewingInvoiceId(null);
+        
+        // Init budgets as well
+        if(currentProject.budgets) {
+            setBudgetList(currentProject.budgets);
+        }
+    }
+  }, [currentProject?.id]);
+
+  // EFFECT 2: Handle Budget Updates (Sync budget list without resetting view)
+  useEffect(() => {
+      if (currentProject?.budgets) {
           setBudgetList(currentProject.budgets);
       }
-
-      // prevent re-fetching invoices if the project ID hasn't actually changed
-      if (lastLoadedProjectId.current === currentProject.id) {
-          return; 
-      }
-      
-      lastLoadedProjectId.current = currentProject.id;
-      setLoadingHistory(true);
-      fetchInvoices(currentProject.id)
-        .then(setSavedInvoices)
-        .catch(console.error)
-        .finally(() => setLoadingHistory(false));
-      
-      setStagedFiles([]);
-      setViewingInvoiceId(null);
-    }
-  }, [currentProject?.id, currentProject?.budgets]);
+  }, [currentProject?.budgets]);
 
   const handleFilesLoaded = async (files: FileData[]) => {
     setStagedFiles(prev => [...prev, ...files]);
@@ -117,9 +121,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
         const text = await file.text();
         await uploadBudget(currentProject.id, file.name, text);
         alert(`Budget ${file.name} uploaded successfully!`);
-        // Ideally we'd refresh the project to get the new budget list, 
-        // but for now we rely on re-fetch logic or just reload page.
-        // Quick fix: simple re-fetch
+        // Refresh project to get updated budget list
         const allProjs = await fetchProjects(); 
         const updatedProj = allProjs.find(p => p.id === currentProject.id);
         if(updatedProj && updatedProj.budgets) setBudgetList(updatedProj.budgets);
