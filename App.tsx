@@ -103,8 +103,16 @@ function App() {
         
         if (profile) setUserProfile(profile);
 
-        // Load Projects
-        const projects = await fetchAssignedProjects(currentUser.id);
+        // Load Projects with Retry Logic
+        let projects = await fetchAssignedProjects(currentUser.id);
+        
+        // If regular user (Line Producer) has 0 projects, it might be a race condition.
+        // Wait and retry once to prevent the "No Projects" flash.
+        if (projects.length === 0 && profile?.app_role === 'user') {
+             await new Promise(r => setTimeout(r, 800)); // Wait 800ms
+             projects = await fetchAssignedProjects(currentUser.id);
+        }
+
         setAssignedProjects(projects);
         
         // AUTO-REDIRECT LOGIC
