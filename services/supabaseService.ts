@@ -13,10 +13,11 @@ export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl!, supabaseKey!) 
   : null;
 
-// Helper to normalize IČO (remove spaces)
+// Helper to normalize IČO (strict digits only)
 const normalizeIco = (ico: string | null | undefined): string | null => {
     if (!ico) return null;
-    return ico.replace(/\s+/g, '');
+    // Remove all non-digit characters (spaces, dashes, 'CZ' prefix, etc.)
+    return ico.replace(/[^0-9]/g, '');
 };
 
 // --- AUTHENTICATION ---
@@ -141,19 +142,36 @@ export const getNextInvoiceId = async (projectId: number): Promise<number> => {
     return 1;
 };
 
-export const checkDuplicateInvoice = async (projectId: number, ico: string | null, variableSymbol: string | null): Promise<boolean> => {
-    if (!supabase || !ico || !variableSymbol) return false;
+export const checkDuplicateInvoice = async (
+    projectId: number, 
+    ico: string | null, 
+    variableSymbol: string | null,
+    amount?: number | null
+): Promise<boolean> => {
+    if (!supabase || !ico) return false;
 
     const cleanIco = normalizeIco(ico);
+    if (!cleanIco) return false;
 
-    // Using limit(1) instead of maybeSingle() to prevent errors if duplicates already exist
-    const { data, error } = await supabase
+    let query = supabase
         .from('invoices')
         .select('id')
         .eq('project_id', projectId)
-        .eq('ico', cleanIco) // Using normalized IČO
-        .eq('variable_symbol', variableSymbol)
-        .limit(1); 
+        .eq('ico', cleanIco);
+
+    if (variableSymbol) {
+        // Strong Match: IČO + VS
+        query = query.eq('variable_symbol', variableSymbol);
+    } else if (amount) {
+        // Fallback Match: IČO + Amount (if VS missing)
+        query = query.eq('amount_with_vat', amount);
+    } else {
+        // Without VS or Amount, we assume it's NOT a duplicate (safe default)
+        // or simplistic IČO check (too aggressive)
+        return false;
+    }
+
+    const { data, error } = await query.limit(1);
 
     if (error) {
         console.error("Error checking for duplicate:", error);
@@ -471,33 +489,50 @@ export const fetchVendorBudgetHistory = async (projectId: number, ico: string): 
     if (!supabase) return [];
     
     const cleanIco = normalizeIco(ico);
+    if (!cleanIco) return [];
 
-    // Complex query to get budget lines used by invoices with matching IČO in this project
-    const { data, error } = await supabase
-        .from('invoice_allocations')
-        .select(`
-            budget_line:budget_lines(*),
-            invoices!inner(project_id, ico)
-        `)
-        .eq('invoices.project_id', projectId)
-        .eq('invoices.ico', cleanIco) // Match normalized
-        .order('id', { ascending: false }) // Newest first
-        .limit(20);
+    try {
+        // 1. Get IDs of past invoices from this vendor in this project
+        const { data: invoiceIds, error: invError } = await supabase
+            .from('invoices')
+            .select('id')
+            .eq('project_id', projectId)
+            .eq('ico', cleanIco)
+            .order('created_at', { ascending: false })
+            .limit(10); // Check last 10 invoices
 
-    if (error) {
-        console.warn("Failed to fetch vendor history", error);
+        if (invError || !invoiceIds || invoiceIds.length === 0) return [];
+
+        const ids = invoiceIds.map(i => i.id);
+
+        // 2. Get Allocations for these invoices
+        const { data: allocations, error: allocError } = await supabase
+            .from('invoice_allocations')
+            .select('budget_line_id')
+            .in('invoice_id', ids);
+
+        if (allocError || !allocations || allocations.length === 0) return [];
+
+        const lineIds = allocations.map(a => a.budget_line_id);
+
+        // 3. Get Full Budget Line details
+        const { data: lines, error: linesError } = await supabase
+            .from('budget_lines')
+            .select('*')
+            .in('id', lineIds);
+
+        if (linesError || !lines) return [];
+
+        // Deduplicate
+        const uniqueLines = new Map<number, BudgetLine>();
+        lines.forEach((line: any) => uniqueLines.set(line.id, line));
+        
+        return Array.from(uniqueLines.values());
+
+    } catch (err) {
+        console.warn("Error fetching vendor history:", err);
         return [];
     }
-
-    // Deduplicate budget lines by ID
-    const uniqueLines = new Map<number, BudgetLine>();
-    data.forEach((item: any) => {
-        if (item.budget_line) {
-            uniqueLines.set(item.budget_line.id, item.budget_line);
-        }
-    });
-
-    return Array.from(uniqueLines.values());
 };
 
 // --- PROJECT ASSIGNMENTS ---

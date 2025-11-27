@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
@@ -65,10 +66,12 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
             // Auto-save as draft if in project
             if (currentProject) {
                 // Check for duplicate BEFORE saving
+                // Pass amount as fallback check if VS is missing
                 const isDuplicate = await checkDuplicateInvoice(
                     currentProject.id, 
                     result.ico, 
-                    result.variableSymbol || null
+                    result.variableSymbol || null,
+                    result.amountWithVat || null
                 );
 
                 if (isDuplicate) {

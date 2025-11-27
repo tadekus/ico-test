@@ -331,98 +331,32 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V26: FIX BUDGET UPLOAD PERMISSIONS ===
+-- === REPAIR V27: IČO DATA CLEANUP & DUPLICATE FIX ===
 
--- 1. DROP EXISTING RESTRICTIVE POLICIES
-DROP POLICY IF EXISTS "Budget Lines Write" ON budget_lines;
-DROP POLICY IF EXISTS "Budget Lines Read" ON budget_lines;
-DROP POLICY IF EXISTS "Master manages all budgets" ON budgets;
-DROP POLICY IF EXISTS "Creators manage budgets" ON budgets;
+-- 1. CLEANUP EXISTING DATA
+-- Remove spaces, dashes, and letters from IČO in 'invoices' table.
+-- This ensures '12 34 56' becomes '123456' so duplicates can be found.
+-- Using REGEXP_REPLACE to keep only digits 0-9.
 
--- 2. CREATE HELPER TO CHECK WRITE ACCESS
--- Returns TRUE if user is Owner OR is assigned to the project
-CREATE OR REPLACE FUNCTION public.can_write_project_data(p_project_id bigint)
-RETURNS boolean AS $$
-BEGIN
-  RETURN EXISTS (
-    SELECT 1 FROM projects 
-    WHERE id = p_project_id 
-    AND (
-        created_by = auth.uid() 
-        OR EXISTS (
-            SELECT 1 FROM project_assignments 
-            WHERE project_id = p_project_id AND user_id = auth.uid()
-        )
-    )
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+UPDATE invoices 
+SET ico = REGEXP_REPLACE(ico, '[^0-9]', '', 'g')
+WHERE ico IS NOT NULL;
 
--- 3. POLICIES FOR BUDGETS TABLE
-
--- READ: Everyone involved can read
-CREATE POLICY "Budgets Read" ON budgets FOR SELECT TO authenticated
-USING ( public.can_manage_invoice(project_id) ); 
-
--- INSERT: Owners and Members can upload
-CREATE POLICY "Budgets Insert" ON budgets FOR INSERT TO authenticated
-WITH CHECK ( public.can_write_project_data(project_id) );
-
--- UPDATE: Owners and Members can activate
-CREATE POLICY "Budgets Update" ON budgets FOR UPDATE TO authenticated
-USING ( public.can_write_project_data(project_id) );
-
--- DELETE: Owners and Members can delete
-CREATE POLICY "Budgets Delete" ON budgets FOR DELETE TO authenticated
-USING ( public.can_write_project_data(project_id) );
-
-
--- 4. POLICIES FOR BUDGET_LINES TABLE
-
--- READ
-CREATE POLICY "Budget Lines Read" ON budget_lines FOR SELECT TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM budgets 
-        WHERE budgets.id = budget_lines.budget_id 
-        AND public.can_manage_invoice(budgets.project_id)
-    )
+-- 2. RE-VERIFY PERMISSIONS (Just in case)
+-- Ensure Line Producers can update invoices (needed for approval workflow)
+DROP POLICY IF EXISTS "Invoices Update" ON invoices;
+CREATE POLICY "Invoices Update" ON invoices FOR UPDATE TO authenticated
+USING ( 
+    -- Can update if owner OR project member
+    user_id = auth.uid() OR public.can_manage_invoice(project_id)
 );
 
--- WRITE (Insert/Update/Delete)
--- We use a simple ALL policy for write operations linked to parent budget permission
-CREATE POLICY "Budget Lines Write" ON budget_lines FOR ALL TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM budgets 
-        WHERE budgets.id = budget_lines.budget_id 
-        AND public.can_write_project_data(budgets.project_id)
-    )
-)
-WITH CHECK (
-    EXISTS (
-        SELECT 1 FROM budgets 
-        WHERE budgets.id = budget_lines.budget_id 
-        AND public.can_write_project_data(budgets.project_id)
-    )
-);
-
--- 5. ENSURE INVOICE ALLOCATIONS ARE WRITABLE TOO
-DROP POLICY IF EXISTS "Allocations Write" ON invoice_allocations;
-CREATE POLICY "Allocations Write" ON invoice_allocations FOR ALL TO authenticated
-USING (
-    EXISTS (
-        SELECT 1 FROM invoices 
-        WHERE invoices.id = invoice_allocations.invoice_id 
-        AND public.can_write_project_data(invoices.project_id)
-    )
-)
-WITH CHECK (
-    EXISTS (
-        SELECT 1 FROM invoices 
-        WHERE invoices.id = invoice_allocations.invoice_id 
-        AND public.can_write_project_data(invoices.project_id)
-    )
+-- Ensure Line Producers can insert invoices
+DROP POLICY IF EXISTS "Invoices Insert" ON invoices;
+CREATE POLICY "Invoices Insert" ON invoices FOR INSERT TO authenticated
+WITH CHECK ( 
+    -- Can insert if owner OR project member
+    user_id = auth.uid() OR public.can_manage_invoice(project_id)
 );
 `;
 
