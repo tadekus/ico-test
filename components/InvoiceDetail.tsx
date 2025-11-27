@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
 import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory } from '../services/supabaseService';
@@ -26,6 +27,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   
   // Smart Suggestions
   const [suggestedLines, setSuggestedLines] = useState<BudgetLine[]>([]);
+  const [hasAutoSelected, setHasAutoSelected] = useState(false);
 
   // RESET BUTTON STATE when loading a new invoice (e.g. auto-advance)
   useEffect(() => {
@@ -35,6 +37,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setSelectedBudgetLine(null);
     setAllocationSearch('');
     setSuggestedLines([]);
+    setHasAutoSelected(false);
     
     // Load Budget Data & Vendor History
     if (project) {
@@ -42,7 +45,17 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
         fetchInvoiceAllocations(invoice.id).then(setAllocations).catch(console.error);
         
         if (invoice.ico) {
-            fetchVendorBudgetHistory(project.id, invoice.ico).then(setSuggestedLines).catch(console.error);
+            fetchVendorBudgetHistory(project.id, invoice.ico).then(history => {
+                setSuggestedLines(history);
+                // AUTO SELECT: If we found history and haven't allocated anything yet
+                if (history.length > 0 && !hasAutoSelected) {
+                    setSelectedBudgetLine(history[0]);
+                    setAllocationSearch(`${history[0].account_number} - ${history[0].account_description}`);
+                    // Explicitly NOT setting amount, user must verify
+                    setAllocationAmount(0); 
+                    setHasAutoSelected(true);
+                }
+            }).catch(console.error);
         }
     }
   }, [invoice.id, project?.id, invoice.ico]);

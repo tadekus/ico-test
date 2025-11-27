@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole, BudgetLine, InvoiceAllocation } from '../types';
 import { parseBudgetXml } from '../utils/budgetParser';
@@ -11,6 +12,12 @@ export const isSupabaseConfigured = !!(supabaseUrl && supabaseKey);
 export const supabase = isSupabaseConfigured 
   ? createClient(supabaseUrl!, supabaseKey!) 
   : null;
+
+// Helper to normalize IČO (remove spaces)
+const normalizeIco = (ico: string | null | undefined): string | null => {
+    if (!ico) return null;
+    return ico.replace(/\s+/g, '');
+};
 
 // --- AUTHENTICATION ---
 
@@ -137,11 +144,13 @@ export const getNextInvoiceId = async (projectId: number): Promise<number> => {
 export const checkDuplicateInvoice = async (projectId: number, ico: string | null, variableSymbol: string | null): Promise<boolean> => {
     if (!supabase || !ico || !variableSymbol) return false;
 
+    const cleanIco = normalizeIco(ico);
+
     const { data, error } = await supabase
         .from('invoices')
         .select('id')
         .eq('project_id', projectId)
-        .eq('ico', ico)
+        .eq('ico', cleanIco)
         .eq('variable_symbol', variableSymbol)
         .maybeSingle(); // Returns null if not found, instead of throwing
 
@@ -176,7 +185,7 @@ export const saveExtractionResult = async (
         user_id: user.id,
         project_id: projectId || null,
         internal_id: internalId,
-        ico: result.ico,
+        ico: normalizeIco(result.ico), // Save normalized IČO
         company_name: result.companyName,
         bank_account: result.bankAccount,
         iban: result.iban,
@@ -205,9 +214,15 @@ export const updateInvoice = async (
 ) => {
     if (!supabase) throw new Error("Supabase not configured");
     
+    // Normalize IČO if it's being updated
+    const finalUpdates = { ...updates };
+    if (finalUpdates.ico) {
+        finalUpdates.ico = normalizeIco(finalUpdates.ico);
+    }
+
     const { data, error } = await supabase
         .from('invoices')
-        .update(updates)
+        .update(finalUpdates)
         .eq('id', id)
         .select('id') 
         .single();
@@ -452,6 +467,8 @@ export const fetchActiveBudgetLines = async (projectId: number): Promise<BudgetL
 export const fetchVendorBudgetHistory = async (projectId: number, ico: string): Promise<BudgetLine[]> => {
     if (!supabase) return [];
     
+    const cleanIco = normalizeIco(ico);
+
     // Complex query to get budget lines used by invoices with matching IČO in this project
     const { data, error } = await supabase
         .from('invoice_allocations')
@@ -460,7 +477,7 @@ export const fetchVendorBudgetHistory = async (projectId: number, ico: string): 
             invoices!inner(project_id, ico)
         `)
         .eq('invoices.project_id', projectId)
-        .eq('invoices.ico', ico)
+        .eq('invoices.ico', cleanIco) // Match normalized
         .order('id', { ascending: false }) // Newest first
         .limit(20);
 
