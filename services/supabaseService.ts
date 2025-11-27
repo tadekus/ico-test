@@ -151,34 +151,41 @@ export const checkDuplicateInvoice = async (
     if (!supabase || !ico) return false;
 
     const cleanIco = normalizeIco(ico);
+    const cleanVs = variableSymbol ? variableSymbol.trim() : null;
+
+    console.log(`Checking Duplicate: Project=${projectId}, Ico=${cleanIco}, VS=${cleanVs}, Amount=${amount}`);
+
     if (!cleanIco) return false;
 
+    // We start with the base query
     let query = supabase
         .from('invoices')
-        .select('id')
+        .select('id, variable_symbol, amount_with_vat')
         .eq('project_id', projectId)
         .eq('ico', cleanIco);
 
-    if (variableSymbol) {
-        // Strong Match: IČO + VS
-        query = query.eq('variable_symbol', variableSymbol);
+    // Filter logic
+    if (cleanVs) {
+       // Strong Match: IČO + VS
+       query = query.eq('variable_symbol', cleanVs);
     } else if (amount) {
-        // Fallback Match: IČO + Amount (if VS missing)
-        query = query.eq('amount_with_vat', amount);
+       // Fallback Match: IČO + Amount (if VS missing)
+       query = query.eq('amount_with_vat', amount);
     } else {
-        // Without VS or Amount, we assume it's NOT a duplicate (safe default)
-        // or simplistic IČO check (too aggressive)
-        return false;
+       console.log("Skipping duplicate check: No VS or Amount provided");
+       return false;
     }
 
-    const { data, error } = await query.limit(1);
+    const { data, error } = await query;
 
     if (error) {
-        console.error("Error checking for duplicate:", error);
+        console.error("Duplicate Check Error:", error);
         return false;
     }
 
-    return data && data.length > 0;
+    const exists = data && data.length > 0;
+    console.log(`Duplicate Found? ${exists}`, data);
+    return exists;
 };
 
 export const saveExtractionResult = async (
@@ -210,7 +217,7 @@ export const saveExtractionResult = async (
         company_name: result.companyName,
         bank_account: result.bankAccount,
         iban: result.iban,
-        variable_symbol: result.variableSymbol,
+        variable_symbol: result.variableSymbol ? result.variableSymbol.trim() : null,
         description: result.description,
         amount_with_vat: result.amountWithVat,
         amount_without_vat: result.amountWithoutVat,
@@ -239,6 +246,9 @@ export const updateInvoice = async (
     const finalUpdates = { ...updates };
     if (finalUpdates.ico) {
         finalUpdates.ico = normalizeIco(finalUpdates.ico);
+    }
+    if (finalUpdates.variable_symbol) {
+        finalUpdates.variable_symbol = finalUpdates.variable_symbol.trim();
     }
 
     const { data, error } = await supabase
@@ -489,31 +499,46 @@ export const fetchVendorBudgetHistory = async (projectId: number, ico: string): 
     if (!supabase) return [];
     
     const cleanIco = normalizeIco(ico);
+    console.log(`Fetching History for Ico=${cleanIco} in Project=${projectId}`);
+
     if (!cleanIco) return [];
 
     try {
         // 1. Get IDs of past invoices from this vendor in this project
-        const { data: invoiceIds, error: invError } = await supabase
+        const { data: invoices, error: invError } = await supabase
             .from('invoices')
             .select('id')
             .eq('project_id', projectId)
             .eq('ico', cleanIco)
             .order('created_at', { ascending: false })
-            .limit(10); // Check last 10 invoices
+            .limit(15);
 
-        if (invError || !invoiceIds || invoiceIds.length === 0) return [];
+        if (invError) {
+            console.error("History fetch error (invoices):", invError);
+            return [];
+        }
 
-        const ids = invoiceIds.map(i => i.id);
+        if (!invoices || invoices.length === 0) {
+            console.log("No previous invoices found for this vendor.");
+            return [];
+        }
+
+        const invoiceIds = invoices.map(i => i.id);
 
         // 2. Get Allocations for these invoices
         const { data: allocations, error: allocError } = await supabase
             .from('invoice_allocations')
             .select('budget_line_id')
-            .in('invoice_id', ids);
+            .in('invoice_id', invoiceIds);
 
-        if (allocError || !allocations || allocations.length === 0) return [];
+        if (allocError) {
+             console.error("History fetch error (allocations):", allocError);
+             return [];
+        }
 
-        const lineIds = allocations.map(a => a.budget_line_id);
+        if (!allocations || allocations.length === 0) return [];
+
+        const lineIds = Array.from(new Set(allocations.map(a => a.budget_line_id)));
 
         // 3. Get Full Budget Line details
         const { data: lines, error: linesError } = await supabase
@@ -521,13 +546,12 @@ export const fetchVendorBudgetHistory = async (projectId: number, ico: string): 
             .select('*')
             .in('id', lineIds);
 
-        if (linesError || !lines) return [];
+        if (linesError) {
+            console.error("History fetch error (lines):", linesError);
+            return [];
+        }
 
-        // Deduplicate
-        const uniqueLines = new Map<number, BudgetLine>();
-        lines.forEach((line: any) => uniqueLines.set(line.id, line));
-        
-        return Array.from(uniqueLines.values());
+        return lines as BudgetLine[];
 
     } catch (err) {
         console.warn("Error fetching vendor history:", err);

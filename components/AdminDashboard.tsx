@@ -331,33 +331,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V27: IČO DATA CLEANUP & DUPLICATE FIX ===
+-- === REPAIR V28: AGGRESSIVE DATA NORMALIZATION ===
 
--- 1. CLEANUP EXISTING DATA
--- Remove spaces, dashes, and letters from IČO in 'invoices' table.
--- This ensures '12 34 56' becomes '123456' so duplicates can be found.
--- Using REGEXP_REPLACE to keep only digits 0-9.
+-- 1. Create Index for performance
+CREATE INDEX IF NOT EXISTS idx_invoices_ico ON invoices(ico);
 
+-- 2. Normalize IČO in database (Strip everything except 0-9)
 UPDATE invoices 
 SET ico = REGEXP_REPLACE(ico, '[^0-9]', '', 'g')
 WHERE ico IS NOT NULL;
 
--- 2. RE-VERIFY PERMISSIONS (Just in case)
--- Ensure Line Producers can update invoices (needed for approval workflow)
-DROP POLICY IF EXISTS "Invoices Update" ON invoices;
-CREATE POLICY "Invoices Update" ON invoices FOR UPDATE TO authenticated
-USING ( 
-    -- Can update if owner OR project member
-    user_id = auth.uid() OR public.can_manage_invoice(project_id)
-);
+-- 3. Normalize Variable Symbols (Trim spaces)
+UPDATE invoices
+SET variable_symbol = TRIM(variable_symbol)
+WHERE variable_symbol IS NOT NULL;
 
--- Ensure Line Producers can insert invoices
-DROP POLICY IF EXISTS "Invoices Insert" ON invoices;
-CREATE POLICY "Invoices Insert" ON invoices FOR INSERT TO authenticated
-WITH CHECK ( 
-    -- Can insert if owner OR project member
-    user_id = auth.uid() OR public.can_manage_invoice(project_id)
-);
+-- 4. Verify Permissions
+GRANT ALL ON TABLE invoices TO authenticated;
+GRANT ALL ON TABLE invoice_allocations TO authenticated;
+GRANT ALL ON TABLE budget_lines TO authenticated;
 `;
 
   const pendingSystemInvites = invitations.filter(inv => inv.target_app_role === 'admin' || inv.target_app_role === 'superuser');
