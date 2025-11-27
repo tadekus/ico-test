@@ -4,7 +4,7 @@ import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
 import { FileData, Project, SavedInvoice, Budget } from '../types';
 import { extractIcoFromDocument } from '../services/geminiService';
-import { fetchInvoices, saveExtractionResult, uploadBudget, setBudgetActive, fetchProjects, checkDuplicateInvoice } from '../services/supabaseService';
+import { fetchInvoices, saveExtractionResult, uploadBudget, setBudgetActive, fetchProjects, checkDuplicateInvoice, deleteInvoice } from '../services/supabaseService';
 
 interface InvoicingModuleProps {
   currentProject: Project | null;
@@ -84,7 +84,6 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
             // Auto-save as draft if in project
             if (currentProject) {
                 // Check for duplicate BEFORE saving
-                // Pass amount as fallback check if VS is missing
                 const isDuplicate = await checkDuplicateInvoice(
                     currentProject.id, 
                     result.ico, 
@@ -98,6 +97,12 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                         status: 'error', 
                         error: 'Duplicate Invoice' 
                     } : f));
+                    
+                    // Auto-remove error from list after 10 seconds
+                    setTimeout(() => {
+                        setStagedFiles(prev => prev.filter(f => f.id !== file.id));
+                    }, 10000);
+                    
                     continue; // Skip processing this file further
                 }
 
@@ -138,6 +143,20 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
     } else {
         setViewingInvoiceId(null);
     }
+  };
+  
+  const handleDeleteInvoice = async (e: React.MouseEvent, id: number) => {
+      e.stopPropagation(); // Prevent opening detail view
+      if (!window.confirm("Are you sure you want to permanently delete this invoice?")) return;
+      try {
+          await deleteInvoice(id);
+          if (currentProject) {
+              const updatedInvoices = await fetchInvoices(currentProject.id);
+              setSavedInvoices(updatedInvoices);
+          }
+      } catch (err: any) {
+          alert("Failed to delete: " + err.message);
+      }
   };
 
   const formatAmount = (amount: number | null | undefined, currency: string | null) => {
@@ -288,7 +307,8 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                            <th className="px-6 py-3 w-24 whitespace-nowrap">Status</th>
                            <th className="px-6 py-3 whitespace-nowrap">Supplier</th>
                            <th className="px-6 py-3 whitespace-nowrap">Description</th>
-                           <th className="px-6 py-3 text-right whitespace-nowrap">Amount</th>
+                           <th className="px-6 py-3 text-right whitespace-nowrap">Base Amount</th>
+                           <th className="px-6 py-3 text-right w-12"></th>
                        </tr>
                    </thead>
                    <tbody className="divide-y divide-slate-100">
@@ -314,13 +334,24 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                                    {inv.description || '-'}
                                </td>
                                <td className="px-6 py-3 text-right font-medium text-slate-900 whitespace-nowrap">
-                                   {formatAmount(inv.amount_with_vat, inv.currency)}
+                                   {formatAmount(inv.amount_without_vat, inv.currency)}
+                               </td>
+                               <td className="px-6 py-3 text-right">
+                                   <button 
+                                       onClick={(e) => handleDeleteInvoice(e, inv.id)} 
+                                       className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                                       title="Delete Invoice"
+                                   >
+                                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                       </svg>
+                                   </button>
                                </td>
                            </tr>
                        ))}
                        {savedInvoices.length === 0 && (
                            <tr>
-                               <td colSpan={5} className="px-6 py-20 text-center text-slate-400 italic">
+                               <td colSpan={6} className="px-6 py-20 text-center text-slate-400 italic">
                                    No invoices processed for this project yet.
                                    <br/>Upload files to get started.
                                </td>

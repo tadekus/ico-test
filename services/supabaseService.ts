@@ -497,6 +497,47 @@ export const fetchActiveBudgetLines = async (projectId: number): Promise<BudgetL
     return lines as BudgetLine[];
 };
 
+export const fetchProjectCostReport = async (projectId: number): Promise<BudgetLine[]> => {
+    if (!supabase) return [];
+
+    // 1. Get Active Budget Lines
+    const lines = await fetchActiveBudgetLines(projectId);
+    if (lines.length === 0) return [];
+
+    // 2. Get All Invoice Allocations for this Project
+    // We join through budget_lines -> budget -> project_id, but it's simpler to query allocations by budget_line_id
+    const lineIds = lines.map(l => l.id);
+    
+    const { data: allocations, error: allocError } = await supabase
+        .from('invoice_allocations')
+        .select('budget_line_id, amount')
+        .in('budget_line_id', lineIds);
+
+    if (allocError) {
+        console.error("Cost report fetch error:", allocError);
+        return lines;
+    }
+
+    // 3. Aggregate Spending
+    const spendingMap = new Map<number, number>();
+    allocations?.forEach(a => {
+        const current = spendingMap.get(a.budget_line_id) || 0;
+        spendingMap.set(a.budget_line_id, current + a.amount);
+    });
+
+    // 4. Merge
+    const report = lines.map(line => {
+        const spent = spendingMap.get(line.id) || 0;
+        return {
+            ...line,
+            spent_amount: spent,
+            remaining_amount: line.original_amount - spent
+        };
+    });
+
+    return report;
+};
+
 export const fetchVendorBudgetHistory = async (projectId: number, ico: string): Promise<BudgetLine[]> => {
     if (!supabase) return [];
     

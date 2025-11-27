@@ -79,6 +79,8 @@ export interface BudgetLine {
   category_number: string;
   category_description: string;
   original_amount: number;
+  spent_amount?: number; // Calculated field for Cost Report
+  remaining_amount?: number; // Calculated field
   created_at?: string;
 }
 

@@ -25,10 +25,6 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const [selectedBudgetLine, setSelectedBudgetLine] = useState<BudgetLine | null>(null);
   const [isAllocating, setIsAllocating] = useState(false);
   
-  // Smart Suggestions
-  const [suggestedLines, setSuggestedLines] = useState<BudgetLine[]>([]);
-  const [hasAutoSelected, setHasAutoSelected] = useState(false);
-
   // RESET BUTTON STATE when loading a new invoice (e.g. auto-advance)
   useEffect(() => {
     setSaveStatus('idle');
@@ -36,30 +32,38 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setAllocations([]);
     setSelectedBudgetLine(null);
     setAllocationSearch('');
-    setSuggestedLines([]);
-    setHasAutoSelected(false);
     setAllocationAmount(0); // Ensure amount resets
     
     // Load Budget Data & Vendor History
     if (project) {
         fetchActiveBudgetLines(project.id).then(setBudgetLines).catch(console.error);
-        fetchInvoiceAllocations(invoice.id).then(setAllocations).catch(console.error);
         
-        if (invoice.ico) {
-            fetchVendorBudgetHistory(project.id, invoice.ico).then(history => {
-                setSuggestedLines(history);
-                // AUTO SELECT: If we found history and haven't allocated anything yet
-                if (history.length > 0 && allocations.length === 0) {
-                    setSelectedBudgetLine(history[0]);
-                    setAllocationSearch(`${history[0].account_number} - ${history[0].account_description}`);
-                    // Explicitly set amount to 0 so user must verify
-                    setAllocationAmount(0); 
-                    setHasAutoSelected(true);
+        // Fetch existing allocations
+        fetchInvoiceAllocations(invoice.id).then(async (currentAllocations) => {
+            setAllocations(currentAllocations);
+            
+            // SMART ALLOCATION LOGIC:
+            // If invoice has NO allocations yet, check history and AUTO-FILL suggestions
+            if (currentAllocations.length === 0 && invoice.ico) {
+                try {
+                    const history = await fetchVendorBudgetHistory(project.id, invoice.ico);
+                    if (history.length > 0) {
+                        // Loop through suggested lines and AUTO-SAVE them with 0 amount
+                        // This populates the list for the user immediately.
+                        for (const line of history) {
+                            await saveInvoiceAllocation(invoice.id, line.id, 0);
+                        }
+                        // Re-fetch to update UI
+                        const updated = await fetchInvoiceAllocations(invoice.id);
+                        setAllocations(updated);
+                    }
+                } catch (e) {
+                    console.error("Auto-allocation error:", e);
                 }
-            }).catch(console.error);
-        }
+            }
+        }).catch(console.error);
     }
-  }, [invoice.id, project?.id, invoice.ico]); // Added allocations length dep logic via hasAutoSelected if needed, but better inside history fetch
+  }, [invoice.id, project?.id, invoice.ico]); 
 
   useEffect(() => {
     if (fileData.extractionResult) {
@@ -121,7 +125,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   };
 
   const handleConfirmAllocation = async () => {
-      if (!selectedBudgetLine || allocationAmount <= 0) return;
+      if (!selectedBudgetLine || isAllocating) return;
+      // Allow amount to be 0 if user just wants to tag it for now
       setIsAllocating(true);
       try {
           await saveInvoiceAllocation(invoice.id, selectedBudgetLine.id, allocationAmount);
@@ -255,35 +260,12 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                     />
                     <button 
                         onClick={handleConfirmAllocation}
-                        disabled={!selectedBudgetLine || allocationAmount <= 0 || isAllocating}
+                        disabled={!selectedBudgetLine || isAllocating}
                         className="bg-indigo-600 text-white px-3 py-1.5 rounded text-xs font-medium disabled:opacity-50 hover:bg-indigo-700 transition-colors"
                     >
                         Add
                     </button>
                 </div>
-
-                {/* --- SMART SUGGESTIONS --- */}
-                {suggestedLines.length > 0 && allocations.length === 0 && !hasAutoSelected && (
-                    <div className="mb-2">
-                        <label className="text-[9px] font-bold text-slate-400 uppercase mb-1 block">Suggested</label>
-                        <div className="space-y-1">
-                            {suggestedLines.map(line => (
-                                <div key={line.id} className="flex justify-between items-center bg-indigo-50 border border-indigo-100 p-1 rounded text-xs">
-                                    <div className="truncate flex-1 pr-2">
-                                        <span className="font-mono font-bold text-indigo-600 mr-1">{line.account_number}</span>
-                                        <span className="text-indigo-900 truncate">{line.account_description}</span>
-                                    </div>
-                                    <button 
-                                        onClick={() => handleSelectBudgetLine(line)}
-                                        className="text-[9px] bg-white text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded hover:bg-indigo-600 hover:text-white transition-colors"
-                                    >
-                                        Use
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
 
                 {/* Allocations List */}
                 <div className="space-y-1 max-h-24 overflow-y-auto mb-2">
@@ -294,7 +276,9 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                                 <span className="truncate text-slate-700">{alloc.budget_line?.account_description}</span>
                             </div>
                             <div className="flex items-center gap-3 ml-2">
-                                <span className="font-mono font-medium">{formatCurrency(alloc.amount)}</span>
+                                <span className={`font-mono font-medium ${alloc.amount === 0 ? 'text-red-500' : 'text-slate-800'}`}>
+                                    {formatCurrency(alloc.amount)}
+                                </span>
                                 <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-[10px]">✕</button>
                             </div>
                         </div>
