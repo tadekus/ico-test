@@ -151,7 +151,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   // Helper to determine input style (Red background if empty/null)
   const getInputClass = (value: string | number | null | undefined) => {
       const isMissing = value === null || value === undefined || value === '' || (typeof value === 'number' && isNaN(value));
-      return `w-full px-2 py-1 border rounded text-xs outline-none transition-colors ${
+      return `w-full px-2 border rounded text-[10px] outline-none transition-colors ${
           isMissing 
             ? 'bg-red-50 border-red-300 focus:border-red-500 text-red-900 placeholder-red-300' 
             : 'bg-white border-slate-300 focus:border-indigo-500 text-slate-900'
@@ -160,7 +160,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   
   const getNumberInputClass = (value: number | null | undefined) => {
       const isMissing = value === null || value === undefined || isNaN(value);
-      return `w-full px-2 py-1 border rounded text-xs font-mono text-right outline-none transition-colors ${
+      return `w-full px-2 border rounded font-mono text-right outline-none transition-colors ${
           isMissing 
             ? 'bg-red-50 border-red-300 focus:border-red-500 text-red-900' 
             : 'bg-white border-slate-300 focus:border-indigo-500 text-slate-900'
@@ -203,9 +203,9 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             
             {/* --- BUDGET ALLOCATION SECTION (Moved to Top) --- */}
             <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 shadow-sm">
-                <div className="flex justify-between items-center mb-3">
+                <div className="flex justify-between items-center mb-2">
                     <label className="text-[10px] font-bold text-indigo-600 uppercase tracking-wide">Budget Allocation</label>
-                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+                    <span className="text-[9px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
                         {allocations.length} items
                     </span>
                 </div>
@@ -264,18 +264,18 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 
                 {/* --- SMART SUGGESTIONS --- */}
                 {suggestedLines.length > 0 && allocations.length === 0 && !hasAutoSelected && (
-                    <div className="mb-3">
-                        <label className="text-[9px] font-bold text-slate-400 uppercase mb-1 block">Suggested for this Supplier</label>
+                    <div className="mb-2">
+                        <label className="text-[9px] font-bold text-slate-400 uppercase mb-1 block">Suggested</label>
                         <div className="space-y-1">
                             {suggestedLines.map(line => (
-                                <div key={line.id} className="flex justify-between items-center bg-indigo-50 border border-indigo-100 p-1.5 rounded text-xs">
+                                <div key={line.id} className="flex justify-between items-center bg-indigo-50 border border-indigo-100 p-1 rounded text-xs">
                                     <div className="truncate flex-1 pr-2">
                                         <span className="font-mono font-bold text-indigo-600 mr-1">{line.account_number}</span>
-                                        <span className="text-indigo-900">{line.account_description}</span>
+                                        <span className="text-indigo-900 truncate">{line.account_description}</span>
                                     </div>
                                     <button 
                                         onClick={() => handleSelectBudgetLine(line)}
-                                        className="text-[10px] bg-white text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded hover:bg-indigo-600 hover:text-white transition-colors"
+                                        className="text-[9px] bg-white text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded hover:bg-indigo-600 hover:text-white transition-colors"
                                     >
                                         Use
                                     </button>
@@ -286,7 +286,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 )}
 
                 {/* Allocations List */}
-                <div className="space-y-1 max-h-32 overflow-y-auto mb-2">
+                <div className="space-y-1 max-h-24 overflow-y-auto mb-2">
                     {allocations.map(alloc => (
                         <div key={alloc.id} className="flex justify-between items-center text-xs bg-white border border-slate-200 p-1.5 rounded">
                             <div className="flex-1 min-w-0">
@@ -300,8 +300,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                         </div>
                     ))}
                     {allocations.length === 0 && (
-                        <div className="text-center text-[10px] text-slate-400 py-2 italic border border-dashed border-slate-200 rounded">
-                            No budget lines assigned
+                        <div className="text-center text-[9px] text-slate-400 py-1 italic border border-dashed border-slate-200 rounded">
+                            No allocations
                         </div>
                     )}
                 </div>
@@ -309,14 +309,12 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 {/* Summary Footer */}
                 <div className="pt-2 border-t border-slate-200 text-xs space-y-1">
                     <div className="flex justify-between items-center">
-                        <span className="text-[9px] text-slate-400 uppercase">Total Allocated</span>
-                        <span className="font-mono font-bold text-slate-700">{formatCurrency(totalAllocated)}</span>
+                        <span className="text-[9px] text-slate-400 uppercase">Allocated / Total</span>
+                        <div className="font-mono font-bold text-slate-700">
+                            {formatCurrency(totalAllocated)} <span className="text-slate-400 text-[9px] font-normal mx-1">of</span> {formatCurrency(invoiceTotal)}
+                        </div>
                     </div>
-                    <div className="flex justify-between items-center">
-                        <span className="text-[9px] text-slate-400 uppercase">Invoice Amount</span>
-                        <span className="font-mono font-bold text-slate-700">{formatCurrency(invoiceTotal)}</span>
-                    </div>
-                    <div className="flex justify-between items-center pt-1 border-t border-slate-100 mt-1">
+                    <div className="flex justify-between items-center pt-1 mt-1">
                         <span className="text-[9px] text-slate-400 uppercase font-bold">Unallocated</span>
                         <span className={`font-mono font-bold ${Math.abs(unallocated) > 1 ? (unallocated < 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-300'}`}>
                             {formatCurrency(unallocated)}
@@ -326,105 +324,104 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             </div>
 
             {/* --- COMPACT DATA ENTRY --- */}
-            <div>
-                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Supplier</label>
-                <input 
-                  type="text" 
-                  value={editedResult.companyName || ''} 
-                  onChange={e => handleInputChange('companyName', e.target.value)}
-                  className={getInputClass(editedResult.companyName)}
-                  placeholder="Missing Company Name"
-                />
-            </div>
-            
-            <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
                 <div>
-                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">IČO</label>
+                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Supplier</label>
                     <input 
                       type="text" 
-                      value={editedResult.ico || ''} 
-                      onChange={e => handleInputChange('ico', e.target.value)}
-                      className={`${getInputClass(editedResult.ico)} font-mono`} 
-                      placeholder="Missing"
+                      value={editedResult.companyName || ''} 
+                      onChange={e => handleInputChange('companyName', e.target.value)}
+                      className={`${getInputClass(editedResult.companyName)} h-6 py-0.5`}
+                      placeholder="Missing Company Name"
                     />
                 </div>
-                <div>
-                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Var. Symbol</label>
-                    <input 
-                      type="text" 
-                      value={editedResult.variableSymbol || ''} 
-                      onChange={e => handleInputChange('variableSymbol', e.target.value)}
-                      className={`${getInputClass(editedResult.variableSymbol)} font-mono`} 
-                      placeholder="Missing"
-                    />
+                
+                <div className="grid grid-cols-2 gap-2">
+                    <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">IČO</label>
+                        <input 
+                          type="text" 
+                          value={editedResult.ico || ''} 
+                          onChange={e => handleInputChange('ico', e.target.value)}
+                          className={`${getInputClass(editedResult.ico)} font-mono h-6 py-0.5`} 
+                          placeholder="Missing"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Var. Symbol</label>
+                        <input 
+                          type="text" 
+                          value={editedResult.variableSymbol || ''} 
+                          onChange={e => handleInputChange('variableSymbol', e.target.value)}
+                          className={`${getInputClass(editedResult.variableSymbol)} font-mono h-6 py-0.5`} 
+                          placeholder="Missing"
+                        />
+                    </div>
                 </div>
-            </div>
 
-            <div>
-                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Description</label>
-                <textarea 
-                  value={editedResult.description || ''} 
-                  onChange={e => handleInputChange('description', e.target.value)}
-                  className={`${getInputClass(editedResult.description)} h-14 resize-none`} 
-                  placeholder="Missing Description"
-                />
-            </div>
+                <div>
+                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Description</label>
+                    <textarea 
+                      value={editedResult.description || ''} 
+                      onChange={e => handleInputChange('description', e.target.value)}
+                      className={`${getInputClass(editedResult.description)} h-10 resize-none py-1 leading-tight`} 
+                      placeholder="Missing Description"
+                    />
+                </div>
 
-            <div className="grid grid-cols-2 gap-2">
-                <div>
-                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Excl. VAT (Base)</label>
-                    <input 
-                      type="number" 
-                      value={editedResult.amountWithoutVat || ''} 
-                      onChange={e => handleInputChange('amountWithoutVat', parseFloat(e.target.value))}
-                      className={getNumberInputClass(editedResult.amountWithoutVat)} 
-                    />
+                <div className="grid grid-cols-2 gap-2">
+                    <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Excl. VAT (Base)</label>
+                        <input 
+                          type="number" 
+                          value={editedResult.amountWithoutVat || ''} 
+                          onChange={e => handleInputChange('amountWithoutVat', parseFloat(e.target.value))}
+                          className={`${getNumberInputClass(editedResult.amountWithoutVat)} text-[10px] h-6 py-0.5`} 
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Incl. VAT (Total)</label>
+                        <input 
+                          type="number" 
+                          value={editedResult.amountWithVat || ''} 
+                          onChange={e => handleInputChange('amountWithVat', parseFloat(e.target.value))}
+                          className={`${getNumberInputClass(editedResult.amountWithVat)} text-[10px] h-6 py-0.5`} 
+                        />
+                    </div>
                 </div>
-                <div>
-                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Incl. VAT (Total)</label>
-                    <input 
-                      type="number" 
-                      value={editedResult.amountWithVat || ''} 
-                      onChange={e => handleInputChange('amountWithVat', parseFloat(e.target.value))}
-                      className={getNumberInputClass(editedResult.amountWithVat)} 
-                    />
-                </div>
-            </div>
-            
-            <div>
-                <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Bank Account</label>
-                <div className="grid grid-cols-1 gap-1">
+                
+                <div className="grid grid-cols-1 gap-1 pt-1">
                     <input 
                       type="text" 
                       value={editedResult.bankAccount || ''} 
                       onChange={e => handleInputChange('bankAccount', e.target.value)}
-                      className={`${getInputClass(editedResult.bankAccount)} font-mono text-[10px]`} 
+                      className={`${getInputClass(editedResult.bankAccount)} font-mono text-[9px] h-6 py-0.5`} 
                       placeholder="Local Account"
                     />
                     <input 
                       type="text" 
                       value={editedResult.iban || ''} 
                       onChange={e => handleInputChange('iban', e.target.value)}
-                      className={`${getInputClass(editedResult.iban)} font-mono text-[10px]`} 
+                      className={`${getInputClass(editedResult.iban)} font-mono text-[9px] h-6 py-0.5`} 
                       placeholder="IBAN"
                     />
                 </div>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-2 pt-2">
-                 <div>
-                     <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Currency</label>
-                     <input 
-                       type="text" 
-                       value={editedResult.currency || 'CZK'} 
-                       onChange={e => handleInputChange('currency', e.target.value)}
-                       className={`${getInputClass(editedResult.currency)} font-mono uppercase text-center`} 
-                     />
-                </div>
-                <div>
-                    <label className="block text-[9px] font-bold text-slate-400 uppercase mb-1">Status</label>
-                    <div className="w-full px-2 py-1 border border-slate-200 bg-slate-50 rounded text-xs font-bold uppercase text-center text-slate-600">
-                        {invoice.status}
+                
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                     <div>
+                         <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Currency</label>
+                         <input 
+                           type="text" 
+                           value={editedResult.currency || 'CZK'} 
+                           onChange={e => handleInputChange('currency', e.target.value)}
+                           className={`${getInputClass(editedResult.currency)} font-mono uppercase text-center h-6 py-0.5`} 
+                         />
+                    </div>
+                    <div>
+                        <label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Status</label>
+                        <div className="w-full px-2 py-0.5 border border-slate-200 bg-slate-50 rounded text-[10px] font-bold uppercase text-center text-slate-600 h-6 flex items-center justify-center">
+                            {invoice.status}
+                        </div>
                     </div>
                 </div>
             </div>

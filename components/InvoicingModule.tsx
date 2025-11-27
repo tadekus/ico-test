@@ -37,7 +37,14 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
             .finally(() => setLoadingHistory(false));
         
         setStagedFiles([]);
-        setViewingInvoiceId(null);
+        
+        // Restore view state from session storage if available
+        const storedId = sessionStorage.getItem(`viewingInvoice_${currentProject.id}`);
+        if (storedId) {
+             setViewingInvoiceId(parseInt(storedId));
+        } else {
+             setViewingInvoiceId(null);
+        }
         
         // Init budgets as well
         if(currentProject.budgets) {
@@ -52,6 +59,17 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
           setBudgetList(currentProject.budgets);
       }
   }, [currentProject?.budgets]);
+
+  // EFFECT 3: Persist View State
+  useEffect(() => {
+      if (currentProject) {
+          if (viewingInvoiceId) {
+              sessionStorage.setItem(`viewingInvoice_${currentProject.id}`, viewingInvoiceId.toString());
+          } else {
+              sessionStorage.removeItem(`viewingInvoice_${currentProject.id}`);
+          }
+      }
+  }, [viewingInvoiceId, currentProject?.id]);
 
   const handleFilesLoaded = async (files: FileData[]) => {
     setStagedFiles(prev => [...prev, ...files]);
