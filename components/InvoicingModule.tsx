@@ -92,7 +92,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
   const formatAmount = (amount: number | null | undefined, currency: string | null) => {
       if (amount === null || amount === undefined) return '-';
       const curr = currency || 'CZK';
-      // Format 1000000 -> 1 000 000.00
+      // Format 1000000 -> 1 000 000.00 (spaces as thousand separator)
       const formattedNum = amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
       return `${formattedNum} ${curr}`;
   };
@@ -195,7 +195,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                            <th className="px-6 py-3 w-16 whitespace-nowrap">#</th>
                            <th className="px-6 py-3 w-24 whitespace-nowrap">Status</th>
                            <th className="px-6 py-3 whitespace-nowrap">Supplier</th>
-                           <th className="px-6 py-3">Description</th>
+                           <th className="px-6 py-3 whitespace-nowrap">Description</th>
                            <th className="px-6 py-3 text-right whitespace-nowrap">Amount</th>
                        </tr>
                    </thead>
@@ -218,7 +218,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                                    <div className="font-medium text-slate-900 truncate max-w-[200px]">{inv.company_name || 'Unknown'}</div>
                                    <div className="text-xs text-slate-500 font-mono">{inv.ico || '-'}</div>
                                </td>
-                               <td className="px-6 py-3 text-slate-600 max-w-xs truncate">
+                               <td className="px-6 py-3 text-slate-600 max-w-xs truncate whitespace-nowrap">
                                    {inv.description || '-'}
                                </td>
                                <td className="px-6 py-3 text-right font-medium text-slate-900 whitespace-nowrap">

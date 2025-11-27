@@ -11,7 +11,7 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<Profile | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
-  const [isRedirecting, setIsRedirecting] = useState(false); // New state to prevent flash
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const [hasPendingInvite, setHasPendingInvite] = useState(false);
 
   // PROJECT CONTEXT
@@ -36,17 +36,17 @@ function App() {
                 const { data: { session } } = await supabase.auth.getSession();
                 await handleUserSession(session?.user ?? null);
 
-                // Listen specifically for SIGNED_OUT to force clear state
                 const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
                     if (event === 'SIGNED_OUT') {
+                         // Strictly clear everything
                          setUser(null);
                          setUserProfile(null);
                          setAssignedProjects([]);
                          setHasPendingInvite(false);
                          setCurrentProject(null);
                          setCurrentProjectRole(null);
+                         setIsRedirecting(false);
                     } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-                        // Pass session user
                         handleUserSession(session?.user ?? null);
                     }
                 });
@@ -64,7 +64,7 @@ function App() {
 
   useEffect(() => {
     // Only update tabs if we are NOT in the middle of a redirect
-    if (isRedirecting) return;
+    if (isRedirecting || isLoadingSession) return;
 
     if (isAdmin || isSuperuser) {
       setActiveTab('admin');
@@ -73,14 +73,11 @@ function App() {
     } else {
       setActiveTab('dashboard');
     }
-  }, [isAdmin, isSuperuser, currentProject, currentProjectRole, isRedirecting]);
+  }, [isAdmin, isSuperuser, currentProject, currentProjectRole, isRedirecting, isLoadingSession]);
 
   const handleUserSession = async (currentUser: User | null) => {
     try {
-      // Optimization: If the user ID hasn't changed, don't reload everything
-      // This prevents UI flicker on window focus (TOKEN_REFRESHED events)
       if (currentUser?.id === user?.id && userProfile) {
-          // just update the user object ref if needed, but skip heavy fetches
           if (currentUser) setUser(currentUser);
           setIsLoadingSession(false);
           return;
@@ -112,20 +109,23 @@ function App() {
         
         // AUTO-REDIRECT LOGIC
         // If regular user (Line Producer), instantly pick first project and go there.
-        // We set isRedirecting=true to block the main render until we are done.
         if (projects.length > 0 && profile?.app_role === 'user') {
             setIsRedirecting(true);
+            // Ensure we don't flash dashboard by keeping loading true effectively via isRedirecting
             try {
-              // Pass currentUser explicitly
               await handleProjectChange(projects[0].id.toString(), projects, currentUser);
+              // Explicitly set tab here to ensure it's ready before render
+              setActiveTab('invoicing'); 
             } catch (err) {
               console.error("Auto-redirect failed", err);
             } finally {
               setIsRedirecting(false);
+              setIsLoadingSession(false);
             }
         } else {
             setCurrentProject(null);
             setCurrentProjectRole(null);
+            setIsLoadingSession(false);
         }
 
       } else {
@@ -134,10 +134,10 @@ function App() {
         setAssignedProjects([]);
         setCurrentProject(null);
         setCurrentProjectRole(null);
+        setIsLoadingSession(false);
       }
     } catch (error) {
       console.error("Session loading error:", error);
-    } finally {
       setIsLoadingSession(false);
     }
   };
@@ -155,17 +155,28 @@ function App() {
   };
 
   const handleSetupSuccess = async () => {
-    if (user?.email) { await acceptInvitation(user.email); setHasPendingInvite(false); await signOut(); alert("Setup complete! Please sign in."); }
+    if (user?.email) { 
+        await acceptInvitation(user.email); 
+        setHasPendingInvite(false); 
+        await handleSignOut(); // Force re-login after setup
+        alert("Setup complete! Please sign in."); 
+    }
   };
 
   const handleSignOut = async () => { 
-      // Explicitly await sign out and clear state to avoid race conditions
-      await signOut(); 
-      setUser(null); 
-      setUserProfile(null); 
-      setHasPendingInvite(false); 
-      setAssignedProjects([]);
-      setCurrentProject(null);
+      try {
+        await signOut(); 
+      } catch (e) {
+        console.error("Signout error", e);
+      } finally {
+        // Force state clear
+        setUser(null); 
+        setUserProfile(null); 
+        setHasPendingInvite(false); 
+        setAssignedProjects([]);
+        setCurrentProject(null);
+        setActiveTab('dashboard');
+      }
   };
 
   // DYNAMIC HEADER LABEL
@@ -185,8 +196,14 @@ function App() {
   const canInvoice = currentProjectRole === 'lineproducer';
 
   // BLOCK RENDER UNTIL READY
-  // This prevents the "Flash of Overview"
-  if (isLoadingSession || isRedirecting) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div></div>;
+  if (isLoadingSession || isRedirecting) return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+          <div className="flex flex-col items-center gap-4">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+            <p className="text-slate-400 text-sm">Loading workspace...</p>
+          </div>
+      </div>
+  );
   
   if (hasPendingInvite && user?.email) return <SetupAccount email={user.email} onSuccess={handleSetupSuccess} />;
   if (configStatus.supabase && !user) return <Auth />;
@@ -265,33 +282,40 @@ function App() {
                     <AdminDashboard profile={userProfile} />
                 )}
 
-                {/* EMPTY STATE for users with no project or unrecognized role */}
+                {/* EMPTY STATE / PROJECT SELECTOR (Replaces Overview) */}
                 {activeTab === 'dashboard' && !isAdmin && !isSuperuser && (
-                    <div className="text-center py-20 bg-white rounded-xl shadow-sm border border-slate-200">
+                    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
                         {assignedProjects.length === 0 ? (
                              <>
-                                <div className="inline-flex p-4 bg-amber-50 rounded-full mb-4">
-                                    <svg className="w-8 h-8 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                <div className="inline-flex p-6 bg-slate-50 rounded-full mb-6">
+                                    <svg className="w-12 h-12 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
                                     </svg>
                                 </div>
-                                <h2 className="text-2xl font-bold text-slate-800 mb-2">No Projects Assigned</h2>
-                                <p className="text-slate-500 max-w-lg mx-auto">
-                                    You are not currently assigned to any active projects. <br/>
-                                    Please contact your Producer or Superuser for access.
+                                <h2 className="text-xl font-bold text-slate-800 mb-2">No Projects Assigned</h2>
+                                <p className="text-slate-500 max-w-sm mx-auto">
+                                    You are not currently assigned to any active projects. Contact your Producer.
                                 </p>
                              </>
                         ) : (
                             <>
-                                <div className="inline-flex p-4 bg-indigo-50 rounded-full mb-4">
-                                    <svg className="w-8 h-8 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                                <div className="inline-flex p-6 bg-indigo-50 rounded-full mb-6">
+                                    <svg className="w-12 h-12 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                                     </svg>
                                 </div>
                                 <h2 className="text-2xl font-bold text-slate-800 mb-2">Select a Project</h2>
-                                <p className="text-slate-500 mb-6">
-                                    Please select a project from the menu above to get started.
+                                <p className="text-slate-500 mb-8 max-w-sm mx-auto">
+                                    Select a project from the top menu to access invoices.
                                 </p>
+                                <select 
+                                    value=""
+                                    onChange={(e) => handleProjectChange(e.target.value)}
+                                    className="bg-white border border-slate-300 text-slate-700 text-lg rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-64 p-3 shadow-sm"
+                                >
+                                    <option value="" disabled>Choose Project...</option>
+                                    {assignedProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                </select>
                             </>
                         )}
                     </div>
