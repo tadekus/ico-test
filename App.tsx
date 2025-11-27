@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import InvoicingModule from './components/InvoicingModule';
 import AdminDashboard from './components/AdminDashboard';
@@ -231,16 +230,32 @@ function App() {
                     </div>
 
                     {!isAdmin && !isSuperuser && (
-                        <div className="hidden md:flex items-center gap-2 border-l border-slate-200 pl-6">
-                            <label className="text-xs font-bold text-slate-400 uppercase">Project</label>
-                            <select 
-                                value={currentProject?.id || ''}
-                                onChange={(e) => handleProjectChange(e.target.value)}
-                                className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2 min-w-[200px]"
-                            >
-                                {assignedProjects.length === 0 && <option value="">No Active Projects</option>}
-                                {assignedProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                            </select>
+                        <div className="hidden md:flex items-center gap-4 border-l border-slate-200 pl-6 ml-6">
+                            <div className="flex items-center gap-2">
+                                <label className="text-xs font-bold text-slate-400 uppercase">Project</label>
+                                <select 
+                                    value={currentProject?.id || ''}
+                                    onChange={(e) => handleProjectChange(e.target.value)}
+                                    className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2 min-w-[200px]"
+                                >
+                                    {assignedProjects.length === 0 && <option value="">No Active Projects</option>}
+                                    {assignedProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                </select>
+                            </div>
+
+                            {activeTab === 'invoicing' && canInvoice && (
+                                <>
+                                    <div className="h-6 w-px bg-slate-200"></div>
+                                    <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-sm">
+                                        <div className="bg-indigo-100 p-1 rounded-md">
+                                            <svg className="w-3.5 h-3.5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                            </svg>
+                                        </div>
+                                        <span className="text-sm font-bold text-slate-700 uppercase tracking-tight">Invoicing</span>
+                                    </div>
+                                </>
+                            )}
                         </div>
                     )}
                 </div>
@@ -262,21 +277,12 @@ function App() {
         {/* MAIN CONTENT */}
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
             
-            {(isAdmin || isSuperuser || (canInvoice && assignedProjects.length > 1)) && (
+            {(isAdmin || isSuperuser) && (
                 <div className="flex justify-center mb-8">
                     <div className="bg-white/50 backdrop-blur-sm p-1 rounded-xl shadow-sm border border-slate-200 inline-flex">
-                        
-                        {canInvoice && (
-                            <button onClick={() => setActiveTab('invoicing')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'invoicing' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                                Invoicing
-                            </button>
-                        )}
-
-                        {(isAdmin || isSuperuser) && (
-                            <button onClick={() => setActiveTab('admin')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'admin' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                                {isAdmin ? 'System Admin' : 'Projects & Team'}
-                            </button>
-                        )}
+                        <button onClick={() => setActiveTab('admin')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'admin' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                            {isAdmin ? 'System Admin' : 'Projects & Team'}
+                        </button>
                     </div>
                 </div>
             )}

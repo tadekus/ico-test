@@ -1,4 +1,3 @@
-
 import { createClient } from '@supabase/supabase-js';
 import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole, BudgetLine, InvoiceAllocation } from '../types';
 import { parseBudgetXml } from '../utils/budgetParser';
@@ -349,6 +348,7 @@ export const uploadBudget = async (projectId: number, fileName: string, xmlConte
     if (!supabase) throw new Error("Supabase not configured");
     
     // 1. Check existing budgets to determine active state
+    // If no budgets exist, this one should be active by default
     const { count } = await supabase
         .from('budgets')
         .select('*', { count: 'exact', head: true })

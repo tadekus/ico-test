@@ -43,7 +43,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
             setBudgetList(currentProject.budgets);
         }
     }
-  }, [currentProject?.id]);
+  }, [currentProject?.id]); // Only depend on ID change
 
   // EFFECT 2: Handle Budget Updates (Sync budget list without resetting view)
   useEffect(() => {
