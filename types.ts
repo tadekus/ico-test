@@ -32,6 +32,7 @@ export interface SavedInvoice {
   project_id?: number | null; // Linked project
   status: 'draft' | 'approved';
   file_content?: string | null; // Base64 content for preview
+  allocations?: InvoiceAllocation[]; // Joined allocations
 }
 
 export interface FileData {
@@ -65,8 +66,28 @@ export interface Budget {
   id: number;
   project_id: number;
   version_name: string;
-  xml_content: string;
+  xml_content: string; // Kept for backup
+  is_active: boolean;
   created_at: string;
+}
+
+export interface BudgetLine {
+  id: number;
+  budget_id: number;
+  account_number: string;
+  account_description: string;
+  category_number: string;
+  category_description: string;
+  original_amount: number;
+  created_at?: string;
+}
+
+export interface InvoiceAllocation {
+  id: number;
+  invoice_id: number;
+  budget_line_id: number;
+  amount: number;
+  budget_line?: BudgetLine; // Joined data
 }
 
 export interface Project {

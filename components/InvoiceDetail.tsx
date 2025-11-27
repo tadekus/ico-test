@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
-import { FileData, ExtractionResult, Project, SavedInvoice } from '../types';
-import { updateInvoice } from '../services/supabaseService';
+import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
+import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation } from '../services/supabaseService';
 
 interface InvoiceDetailProps {
   invoice: SavedInvoice;
@@ -17,15 +17,33 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Budget Allocation State
+  const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
+  const [allocations, setAllocations] = useState<InvoiceAllocation[]>([]);
+  const [allocationSearch, setAllocationSearch] = useState('');
+  const [allocationAmount, setAllocationAmount] = useState<number>(0);
+  const [isAllocating, setIsAllocating] = useState(false);
+
   // RESET BUTTON STATE when loading a new invoice (e.g. auto-advance)
   useEffect(() => {
     setSaveStatus('idle');
     setErrorMessage(null);
-  }, [invoice.id]);
+    setAllocations([]);
+    
+    // Load Budget Data
+    if (project) {
+        fetchActiveBudgetLines(project.id).then(setBudgetLines).catch(console.error);
+        fetchInvoiceAllocations(invoice.id).then(setAllocations).catch(console.error);
+    }
+  }, [invoice.id, project?.id]);
 
   useEffect(() => {
     if (fileData.extractionResult) {
       setEditedResult(fileData.extractionResult);
+      // Default allocation amount to total amount (without VAT preferably, usually Cost)
+      if (fileData.extractionResult.amountWithoutVat) {
+          setAllocationAmount(fileData.extractionResult.amountWithoutVat);
+      }
     }
   }, [fileData]);
 
@@ -71,6 +89,28 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setEditedResult(prev => prev ? ({ ...prev, [field]: value }) : null);
   };
 
+  const handleAddAllocation = async (budgetLineId: number) => {
+      setIsAllocating(true);
+      try {
+          await saveInvoiceAllocation(invoice.id, budgetLineId, allocationAmount);
+          // Refresh
+          const updated = await fetchInvoiceAllocations(invoice.id);
+          setAllocations(updated);
+          setAllocationSearch(''); // Clear search
+      } catch (err) {
+          alert("Failed to allocate budget line");
+      } finally {
+          setIsAllocating(false);
+      }
+  };
+
+  const handleRemoveAllocation = async (id: number) => {
+      try {
+          await deleteInvoiceAllocation(id);
+          setAllocations(prev => prev.filter(a => a.id !== id));
+      } catch (err) { alert("Failed to remove allocation"); }
+  };
+
   const isReapproving = invoice.status === 'approved';
 
   // Helper to determine input style (Red background if empty/null)
@@ -92,12 +132,21 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
       }`;
   };
 
+  // Filter budget lines for search
+  const filteredBudgetLines = allocationSearch 
+    ? budgetLines.filter(l => 
+        l.account_number.toLowerCase().includes(allocationSearch.toLowerCase()) || 
+        l.account_description.toLowerCase().includes(allocationSearch.toLowerCase()) ||
+        l.category_description.toLowerCase().includes(allocationSearch.toLowerCase())
+      ).slice(0, 10) // Limit results
+    : [];
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-140px)]">
       
       {/* LEFT: DATA ENTRY (Narrower) */}
-      <div className="lg:col-span-1 bg-white rounded-xl shadow-xl border border-slate-200 flex flex-col h-full">
-        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-xl">
+      <div className="lg:col-span-1 bg-white rounded-xl shadow-xl border border-slate-200 flex flex-col h-full overflow-hidden">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-xl shrink-0">
            <button onClick={onBack} className="text-slate-500 hover:text-indigo-600 text-sm flex items-center gap-1 font-medium">
              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -209,9 +258,70 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                   placeholder="IBAN"
                 />
             </div>
+
+            {/* --- BUDGET ALLOCATION SECTION --- */}
+            <div className="border-t border-slate-100 pt-4 mt-2">
+                <label className="block text-[10px] font-bold text-indigo-500 uppercase mb-2">Budget Allocation</label>
+                
+                {/* Search & Add */}
+                <div className="bg-slate-50 p-2 rounded border border-slate-200 mb-2">
+                    <div className="mb-2">
+                        <input 
+                            type="text" 
+                            placeholder="Search budget line (0101...)"
+                            value={allocationSearch}
+                            onChange={e => setAllocationSearch(e.target.value)}
+                            className="w-full text-xs px-2 py-1.5 border rounded outline-none"
+                        />
+                        {allocationSearch && filteredBudgetLines.length > 0 && (
+                            <div className="absolute bg-white border shadow-lg rounded mt-1 w-64 max-h-40 overflow-auto z-50 text-xs">
+                                {filteredBudgetLines.map(line => (
+                                    <div 
+                                        key={line.id} 
+                                        className="p-2 hover:bg-indigo-50 cursor-pointer border-b border-slate-50"
+                                        onClick={() => handleAddAllocation(line.id)}
+                                    >
+                                        <div className="font-bold text-indigo-700">{line.account_number}</div>
+                                        <div className="truncate">{line.account_description}</div>
+                                        <div className="text-[10px] text-slate-400">{line.category_description}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <input 
+                            type="number"
+                            value={allocationAmount}
+                            onChange={e => setAllocationAmount(parseFloat(e.target.value))}
+                            className="w-24 text-xs px-2 py-1.5 border rounded text-right"
+                        />
+                        <span className="text-xs text-slate-400">Allocated Amount</span>
+                    </div>
+                </div>
+
+                {/* List of Allocations */}
+                <div className="space-y-1">
+                    {allocations.map(alloc => (
+                        <div key={alloc.id} className="flex justify-between items-center text-xs bg-white border border-slate-200 p-2 rounded">
+                            <div className="flex-1 min-w-0">
+                                <span className="font-mono font-bold text-indigo-600 mr-2">{alloc.budget_line?.account_number}</span>
+                                <span className="truncate block text-slate-600">{alloc.budget_line?.account_description}</span>
+                            </div>
+                            <div className="flex items-center gap-2 ml-2">
+                                <span className="font-mono">{alloc.amount.toFixed(0)}</span>
+                                <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-red-400 hover:text-red-600">×</button>
+                            </div>
+                        </div>
+                    ))}
+                    {allocations.length === 0 && (
+                        <div className="text-center text-[10px] text-slate-400 py-2 italic">No budget lines assigned</div>
+                    )}
+                </div>
+            </div>
         </div>
 
-        <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-xl">
+        <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-xl shrink-0">
             {errorMessage && <div className="text-red-500 text-xs mb-2">{errorMessage}</div>}
             <button 
                onClick={handleApprove}

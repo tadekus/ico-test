@@ -1,6 +1,7 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole } from '../types';
+import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole, BudgetLine, InvoiceAllocation } from '../types';
+import { parseBudgetXml } from '../utils/budgetParser';
 
 // These should be set in your environment variables
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -186,7 +187,6 @@ export const updateInvoice = async (
 ) => {
     if (!supabase) throw new Error("Supabase not configured");
     
-    // Minimal select to prevent large payload or recursion
     const { data, error } = await supabase
         .from('invoices')
         .update(updates)
@@ -224,6 +224,33 @@ export const deleteInvoice = async (id: number): Promise<void> => {
   if (error) throw error;
 };
 
+export const fetchInvoiceAllocations = async (invoiceId: number): Promise<InvoiceAllocation[]> => {
+    if (!supabase) return [];
+    const { data, error } = await supabase
+        .from('invoice_allocations')
+        .select(`*, budget_line:budget_lines(*)`)
+        .eq('invoice_id', invoiceId);
+        
+    if (error) throw error;
+    return data as InvoiceAllocation[];
+};
+
+export const saveInvoiceAllocation = async (invoiceId: number, budgetLineId: number, amount: number) => {
+    if (!supabase) throw new Error("Supabase not configured");
+    const { error } = await supabase.from('invoice_allocations').insert([{
+        invoice_id: invoiceId,
+        budget_line_id: budgetLineId,
+        amount
+    }]);
+    if (error) throw error;
+};
+
+export const deleteInvoiceAllocation = async (allocationId: number) => {
+    if (!supabase) throw new Error("Supabase not configured");
+    const { error } = await supabase.from('invoice_allocations').delete().eq('id', allocationId);
+    if (error) throw error;
+};
+
 // --- PROJECTS & BUDGETS ---
 
 export const createProject = async (
@@ -256,6 +283,7 @@ export const createProject = async (
 
 export const fetchProjects = async (): Promise<Project[]> => {
     if (!supabase) return [];
+    // We order budgets by ID (newest last usually) or active
     const { data, error } = await supabase
         .from('projects')
         .select(`*, budgets(*)`)
@@ -265,7 +293,14 @@ export const fetchProjects = async (): Promise<Project[]> => {
         console.error("Fetch Projects Error:", error);
         throw new Error("Failed to load projects. " + error.message);
     }
-    return data as Project[];
+    
+    // Sort budgets locally if needed, e.g. active first
+    const projects = data.map((p: any) => ({
+        ...p,
+        budgets: p.budgets?.sort((a: Budget, b: Budget) => b.id - a.id)
+    }));
+
+    return projects as Project[];
 };
 
 export const fetchAssignedProjects = async (userId: string): Promise<Project[]> => {
@@ -283,7 +318,7 @@ export const fetchAssignedProjects = async (userId: string): Promise<Project[]> 
 
     const { data: projects, error: projError } = await supabase
         .from('projects')
-        .select('*')
+        .select(`*, budgets(*)`) // Fetch budgets too
         .in('id', projectIds)
         .order('created_at', { ascending: false });
         
@@ -304,7 +339,6 @@ export const getProjectRole = async (userId: string, projectId: number): Promise
     return data.role as ProjectRole;
 }
 
-
 export const deleteProject = async (id: number): Promise<void> => {
     if (!supabase) throw new Error("Supabase not configured");
     const { error } = await supabase.from('projects').delete().eq('id', id);
@@ -313,12 +347,79 @@ export const deleteProject = async (id: number): Promise<void> => {
 
 export const uploadBudget = async (projectId: number, fileName: string, xmlContent: string) => {
     if (!supabase) throw new Error("Supabase not configured");
-    const { error } = await supabase.from('budgets').insert([{
+    
+    // 1. Parse XML to lines
+    const lines = parseBudgetXml(xmlContent);
+    if (lines.length === 0) throw new Error("No valid budget lines found in XML.");
+
+    // 2. Create Budget Record
+    const { data: budgetData, error: budgetError } = await supabase
+        .from('budgets')
+        .insert([{
             project_id: projectId,
             version_name: fileName,
-            xml_content: xmlContent
-        }]);
+            xml_content: xmlContent,
+            is_active: false // Default to inactive
+        }])
+        .select()
+        .single();
+
+    if (budgetError) throw budgetError;
+    
+    // 3. Bulk Insert Lines
+    const budgetLinesPayload = lines.map(line => ({
+        budget_id: budgetData.id,
+        ...line
+    }));
+
+    const { error: linesError } = await supabase
+        .from('budget_lines')
+        .insert(budgetLinesPayload);
+
+    if (linesError) {
+        // Cleanup if lines fail
+        await supabase.from('budgets').delete().eq('id', budgetData.id);
+        throw new Error("Failed to save budget details: " + linesError.message);
+    }
+};
+
+export const setBudgetActive = async (projectId: number, budgetId: number) => {
+    if (!supabase) throw new Error("Supabase not configured");
+    
+    // Deactivate all for this project
+    await supabase.from('budgets')
+        .update({ is_active: false })
+        .eq('project_id', projectId);
+        
+    // Activate selected
+    const { error } = await supabase.from('budgets')
+        .update({ is_active: true })
+        .eq('id', budgetId);
+        
     if (error) throw error;
+};
+
+export const fetchActiveBudgetLines = async (projectId: number): Promise<BudgetLine[]> => {
+    if (!supabase) return [];
+    
+    // Find active budget ID first
+    const { data: budget, error: bError } = await supabase
+        .from('budgets')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('is_active', true)
+        .single();
+        
+    if (bError || !budget) return []; // No active budget
+
+    // Fetch lines
+    const { data: lines, error: lError } = await supabase
+        .from('budget_lines')
+        .select('*')
+        .eq('budget_id', budget.id);
+        
+    if (lError) throw lError;
+    return lines as BudgetLine[];
 };
 
 // --- PROJECT ASSIGNMENTS ---
