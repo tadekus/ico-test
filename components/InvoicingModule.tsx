@@ -3,7 +3,7 @@ import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
 import { FileData, Project, SavedInvoice, Budget } from '../types';
 import { extractIcoFromDocument } from '../services/geminiService';
-import { fetchInvoices, saveExtractionResult, uploadBudget, setBudgetActive, fetchProjects } from '../services/supabaseService';
+import { fetchInvoices, saveExtractionResult, uploadBudget, setBudgetActive, fetchProjects, checkDuplicateInvoice } from '../services/supabaseService';
 
 interface InvoicingModuleProps {
   currentProject: Project | null;
@@ -62,8 +62,24 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
         try {
             const result = await extractIcoFromDocument(file);
             
-            // Auto-save as draft
+            // Auto-save as draft if in project
             if (currentProject) {
+                // Check for duplicate BEFORE saving
+                const isDuplicate = await checkDuplicateInvoice(
+                    currentProject.id, 
+                    result.ico, 
+                    result.variableSymbol || null
+                );
+
+                if (isDuplicate) {
+                    setStagedFiles(prev => prev.map(f => f.id === file.id ? { 
+                        ...f, 
+                        status: 'error', 
+                        error: 'Duplicate Invoice' 
+                    } : f));
+                    continue; // Skip processing this file further
+                }
+
                 await saveExtractionResult(result, currentProject.id, 'draft', file.base64);
                 // Refresh list
                 const updatedInvoices = await fetchInvoices(currentProject.id);
@@ -78,11 +94,11 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                 } : f));
             }
 
-        } catch (err) {
+        } catch (err: any) {
             setStagedFiles(prev => prev.map(f => f.id === file.id ? { 
                 ...f, 
                 status: 'error', 
-                error: 'Failed to analyze' 
+                error: err.message || 'Failed to analyze' 
             } : f));
         }
     }
@@ -208,12 +224,14 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                            <div key={file.id} className="p-3 flex items-center justify-between opacity-80">
                                <div className="flex items-center gap-2 overflow-hidden">
                                    <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 
-                                       ${file.status === 'analyzing' ? 'bg-amber-400 animate-pulse' : 'bg-red-500'}`} 
+                                       ${file.status === 'analyzing' ? 'bg-amber-400 animate-pulse' : 
+                                         file.status === 'error' ? 'bg-red-500' : 'bg-emerald-500'}`} 
                                    />
                                    <div className="min-w-0">
                                        <p className="text-xs font-medium text-slate-900 truncate">{file.file.name}</p>
-                                       <p className="text-[10px] text-slate-400 italic">
-                                            {file.status === 'analyzing' ? 'Extracting...' : 'Error'}
+                                       <p className={`text-[10px] italic ${file.status === 'error' ? 'text-red-600 font-bold' : 'text-slate-400'}`}>
+                                            {file.status === 'analyzing' ? 'Extracting...' : 
+                                             file.status === 'error' ? (file.error || 'Error') : 'Saved'}
                                        </p>
                                    </div>
                                </div>

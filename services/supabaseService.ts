@@ -134,6 +134,25 @@ export const getNextInvoiceId = async (projectId: number): Promise<number> => {
     return 1;
 };
 
+export const checkDuplicateInvoice = async (projectId: number, ico: string | null, variableSymbol: string | null): Promise<boolean> => {
+    if (!supabase || !ico || !variableSymbol) return false;
+
+    const { data, error } = await supabase
+        .from('invoices')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('ico', ico)
+        .eq('variable_symbol', variableSymbol)
+        .maybeSingle(); // Returns null if not found, instead of throwing
+
+    if (error) {
+        console.error("Error checking for duplicate:", error);
+        return false;
+    }
+
+    return !!data;
+};
+
 export const saveExtractionResult = async (
     result: ExtractionResult, 
     projectId?: number,
@@ -428,6 +447,37 @@ export const fetchActiveBudgetLines = async (projectId: number): Promise<BudgetL
         
     if (lError) throw lError;
     return lines as BudgetLine[];
+};
+
+export const fetchVendorBudgetHistory = async (projectId: number, ico: string): Promise<BudgetLine[]> => {
+    if (!supabase) return [];
+    
+    // Complex query to get budget lines used by invoices with matching IČO in this project
+    const { data, error } = await supabase
+        .from('invoice_allocations')
+        .select(`
+            budget_line:budget_lines(*),
+            invoices!inner(project_id, ico)
+        `)
+        .eq('invoices.project_id', projectId)
+        .eq('invoices.ico', ico)
+        .order('id', { ascending: false }) // Newest first
+        .limit(20);
+
+    if (error) {
+        console.warn("Failed to fetch vendor history", error);
+        return [];
+    }
+
+    // Deduplicate budget lines by ID
+    const uniqueLines = new Map<number, BudgetLine>();
+    data.forEach((item: any) => {
+        if (item.budget_line) {
+            uniqueLines.set(item.budget_line.id, item.budget_line);
+        }
+    });
+
+    return Array.from(uniqueLines.values());
 };
 
 // --- PROJECT ASSIGNMENTS ---

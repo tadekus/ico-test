@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
-import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation } from '../services/supabaseService';
+import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory } from '../services/supabaseService';
 
 interface InvoiceDetailProps {
   invoice: SavedInvoice;
@@ -23,6 +23,9 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const [allocationAmount, setAllocationAmount] = useState<number>(0);
   const [selectedBudgetLine, setSelectedBudgetLine] = useState<BudgetLine | null>(null);
   const [isAllocating, setIsAllocating] = useState(false);
+  
+  // Smart Suggestions
+  const [suggestedLines, setSuggestedLines] = useState<BudgetLine[]>([]);
 
   // RESET BUTTON STATE when loading a new invoice (e.g. auto-advance)
   useEffect(() => {
@@ -31,13 +34,18 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setAllocations([]);
     setSelectedBudgetLine(null);
     setAllocationSearch('');
+    setSuggestedLines([]);
     
-    // Load Budget Data
+    // Load Budget Data & Vendor History
     if (project) {
         fetchActiveBudgetLines(project.id).then(setBudgetLines).catch(console.error);
         fetchInvoiceAllocations(invoice.id).then(setAllocations).catch(console.error);
+        
+        if (invoice.ico) {
+            fetchVendorBudgetHistory(project.id, invoice.ico).then(setSuggestedLines).catch(console.error);
+        }
     }
-  }, [invoice.id, project?.id]);
+  }, [invoice.id, project?.id, invoice.ico]);
 
   useEffect(() => {
     if (fileData.extractionResult) {
@@ -239,6 +247,29 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                         Add
                     </button>
                 </div>
+
+                {/* --- SMART SUGGESTIONS --- */}
+                {suggestedLines.length > 0 && allocations.length === 0 && (
+                    <div className="mb-3">
+                        <label className="text-[9px] font-bold text-slate-400 uppercase mb-1 block">Suggested for this Supplier</label>
+                        <div className="space-y-1">
+                            {suggestedLines.map(line => (
+                                <div key={line.id} className="flex justify-between items-center bg-indigo-50 border border-indigo-100 p-1.5 rounded text-xs">
+                                    <div className="truncate flex-1 pr-2">
+                                        <span className="font-mono font-bold text-indigo-600 mr-1">{line.account_number}</span>
+                                        <span className="text-indigo-900">{line.account_description}</span>
+                                    </div>
+                                    <button 
+                                        onClick={() => handleSelectBudgetLine(line)}
+                                        className="text-[10px] bg-white text-indigo-600 border border-indigo-200 px-2 py-0.5 rounded hover:bg-indigo-600 hover:text-white transition-colors"
+                                    >
+                                        Use
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Allocations List */}
                 <div className="space-y-1 max-h-32 overflow-y-auto mb-2">
