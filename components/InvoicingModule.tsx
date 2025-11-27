@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
 import { FileData, Project, SavedInvoice } from '../types';
@@ -15,10 +15,18 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
   const [savedInvoices, setSavedInvoices] = useState<SavedInvoice[]>([]);
   const [viewingInvoiceId, setViewingInvoiceId] = useState<number | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  
+  // Track last project ID to prevent redundant re-fetching on focus/renders
+  const lastLoadedProjectId = useRef<number | null>(null);
 
-  // Load project history when project changes
   useEffect(() => {
     if (currentProject) {
+      // prevent re-fetching if the project ID hasn't actually changed
+      if (lastLoadedProjectId.current === currentProject.id) {
+          return; 
+      }
+      
+      lastLoadedProjectId.current = currentProject.id;
       setLoadingHistory(true);
       fetchInvoices(currentProject.id)
         .then(setSavedInvoices)
@@ -92,7 +100,6 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
   const activeInvoice = savedInvoices.find(inv => inv.id === viewingInvoiceId);
   
   // Find the NEXT draft invoice for the "Approve & Next" workflow
-  // We filter out the current one and look for the first draft available
   const draftInvoices = savedInvoices.filter(inv => inv.status === 'draft' && inv.id !== viewingInvoiceId);
   const nextDraftId = draftInvoices.length > 0 ? draftInvoices[0].id : null;
 
@@ -134,33 +141,33 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
 
   // VIEW: MAIN DASHBOARD
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-       {/* LEFT COLUMN: UPLOAD */}
-       <div className="lg:col-span-1 space-y-6">
-           <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
-               <h3 className="font-bold text-slate-800 mb-4">Upload Invoices</h3>
+    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+       {/* LEFT COLUMN: UPLOAD (1/4 width) */}
+       <div className="lg:col-span-1 space-y-4">
+           <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-4">
+               <h3 className="font-bold text-slate-800 mb-3 text-sm">Upload Invoices</h3>
                <Dropzone onFileLoaded={handleFilesLoaded} disabled={!currentProject} />
-               {!currentProject && <p className="text-xs text-red-500 mt-2">Please select a project first.</p>}
+               {!currentProject && <p className="text-[10px] text-red-500 mt-1">Select a project first.</p>}
            </div>
            
            {/* UPLOAD PROGRESS AREA */}
            {stagedFiles.length > 0 && (
                <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-                   <div className="bg-indigo-50 px-6 py-3 border-b border-indigo-100 flex justify-between items-center">
-                       <h3 className="font-bold text-indigo-900 text-sm">Processing Queue</h3>
-                       <span className="text-xs font-bold bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded-full">{stagedFiles.length}</span>
+                   <div className="bg-indigo-50 px-4 py-2 border-b border-indigo-100 flex justify-between items-center">
+                       <h3 className="font-bold text-indigo-900 text-xs">Processing Queue</h3>
+                       <span className="text-[10px] font-bold bg-indigo-200 text-indigo-800 px-1.5 py-0.5 rounded-full">{stagedFiles.length}</span>
                    </div>
-                   <div className="divide-y divide-slate-100">
+                   <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
                        {stagedFiles.map(file => (
-                           <div key={file.id} className="p-4 flex items-center justify-between opacity-80">
-                               <div className="flex items-center gap-3 overflow-hidden">
-                                   <div className={`w-2 h-2 rounded-full flex-shrink-0 
+                           <div key={file.id} className="p-3 flex items-center justify-between opacity-80">
+                               <div className="flex items-center gap-2 overflow-hidden">
+                                   <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 
                                        ${file.status === 'analyzing' ? 'bg-amber-400 animate-pulse' : 'bg-red-500'}`} 
                                    />
                                    <div className="min-w-0">
-                                       <p className="text-sm font-medium text-slate-900 truncate">{file.file.name}</p>
-                                       <p className="text-xs text-slate-400 italic">
-                                            {file.status === 'analyzing' ? 'Extracting & Saving...' : 'Error'}
+                                       <p className="text-xs font-medium text-slate-900 truncate">{file.file.name}</p>
+                                       <p className="text-[10px] text-slate-400 italic">
+                                            {file.status === 'analyzing' ? 'Extracting...' : 'Error'}
                                        </p>
                                    </div>
                                </div>
@@ -171,22 +178,22 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
            )}
        </div>
 
-       {/* RIGHT COLUMN: PROJECT INVOICE LIST */}
-       <div className="lg:col-span-2 bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[700px]">
-           <div className="p-6 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
+       {/* RIGHT COLUMN: PROJECT INVOICE LIST (3/4 width) */}
+       <div className="lg:col-span-3 bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[750px]">
+           <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                <div>
                    <h3 className="font-bold text-slate-800">Project Invoices</h3>
                    <p className="text-xs text-slate-500">{currentProject ? currentProject.name : 'No Project Selected'}</p>
                </div>
-               {loadingHistory && <div className="animate-spin w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full"></div>}
+               {loadingHistory && <div className="animate-spin w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full"></div>}
            </div>
            
            <div className="flex-1 overflow-auto">
                <table className="w-full text-sm text-left">
                    <thead className="bg-white text-slate-500 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-sm">
                        <tr>
-                           <th className="px-6 py-3 w-20 whitespace-nowrap">#</th>
-                           <th className="px-6 py-3 whitespace-nowrap">Status</th>
+                           <th className="px-6 py-3 w-16 whitespace-nowrap">#</th>
+                           <th className="px-6 py-3 w-24 whitespace-nowrap">Status</th>
                            <th className="px-6 py-3 whitespace-nowrap">Supplier</th>
                            <th className="px-6 py-3">Description</th>
                            <th className="px-6 py-3 text-right whitespace-nowrap">Amount</th>
@@ -202,7 +209,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
                                    #{inv.internal_id || '-'}
                                </td>
                                <td className="px-6 py-3 whitespace-nowrap">
-                                   <span className={`px-2 py-1 rounded-full text-xs font-bold uppercase tracking-wide
+                                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide
                                        ${inv.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                                        {inv.status}
                                    </span>

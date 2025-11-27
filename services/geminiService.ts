@@ -23,7 +23,7 @@ FIELDS TO EXTRACT:
 
 4. **Payment Details**:
    - **Variable Symbol (VS)**: Look for "Variabilní symbol", "VS". This is crucial.
-   - **Description**: Summarize "What is being invoiced" in 3-5 words (e.g., "Camera rental", "Catering services", "Location fee").
+   - **Description**: Summarize "What is being invoiced" in 3-5 words. **CRITICAL: Do NOT translate the description. Keep it in the original language (Czech).** (e.g., "Pronájem kamery", "Cateringové služby", "Lokace").
 
 5. **Amounts & Currency**:
    - **Total Amount (With VAT/DPH)**: Look for "Celkem k úhradě", "Částka celkem", "S DPH", "Total".
@@ -52,7 +52,7 @@ export const extractIcoFromDocument = async (fileData: FileData): Promise<Extrac
       bankAccount: { type: Type.STRING, description: "Local bank account number." },
       iban: { type: Type.STRING, description: "International Bank Account Number (IBAN)." },
       variableSymbol: { type: Type.STRING, description: "Variable symbol (VS) for payment." },
-      description: { type: Type.STRING, description: "Short description of the service or goods." },
+      description: { type: Type.STRING, description: "Short description of the service or goods in ORIGINAL LANGUAGE (Czech)." },
       amountWithVat: { type: Type.NUMBER, description: "Total amount including VAT." },
       amountWithoutVat: { type: Type.NUMBER, description: "Amount excluding VAT (Tax Base)." },
       currency: { type: Type.STRING, description: "Currency code (normalize to CZK if Kč)." },
@@ -81,7 +81,7 @@ export const extractIcoFromDocument = async (fileData: FileData): Promise<Extrac
           }
         },
         {
-          text: "Extract IČO, Company Name, Bank Details, VS, Description and Amounts from this invoice."
+          text: "Extract IČO, Company Name, Bank Details, VS, Description (in Czech) and Amounts from this invoice."
         }
       ];
     }

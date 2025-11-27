@@ -73,6 +73,25 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 
   const isReapproving = invoice.status === 'approved';
 
+  // Helper to determine input style (Red background if empty/null)
+  const getInputClass = (value: string | number | null | undefined) => {
+      const isMissing = value === null || value === undefined || value === '' || (typeof value === 'number' && isNaN(value));
+      return `w-full px-2 py-1.5 border rounded text-sm outline-none transition-colors ${
+          isMissing 
+            ? 'bg-red-50 border-red-300 focus:border-red-500 text-red-900 placeholder-red-300' 
+            : 'bg-white border-slate-300 focus:border-indigo-500 text-slate-900'
+      }`;
+  };
+  
+  const getNumberInputClass = (value: number | null | undefined) => {
+      const isMissing = value === null || value === undefined || isNaN(value);
+      return `w-full px-2 py-1.5 border rounded text-sm font-mono text-right outline-none transition-colors ${
+          isMissing 
+            ? 'bg-red-50 border-red-300 focus:border-red-500 text-red-900' 
+            : 'bg-white border-slate-300 focus:border-indigo-500 text-slate-900'
+      }`;
+  };
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-140px)]">
       
@@ -102,7 +121,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                   type="text" 
                   value={editedResult.companyName || ''} 
                   onChange={e => handleInputChange('companyName', e.target.value)}
-                  className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm focus:border-indigo-500 outline-none" 
+                  className={getInputClass(editedResult.companyName)}
+                  placeholder="Missing Company Name"
                 />
             </div>
             
@@ -113,7 +133,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                       type="text" 
                       value={editedResult.ico || ''} 
                       onChange={e => handleInputChange('ico', e.target.value)}
-                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono" 
+                      className={`${getInputClass(editedResult.ico)} font-mono`} 
+                      placeholder="Missing"
                     />
                 </div>
                 <div>
@@ -122,7 +143,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                       type="text" 
                       value={editedResult.variableSymbol || ''} 
                       onChange={e => handleInputChange('variableSymbol', e.target.value)}
-                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono" 
+                      className={`${getInputClass(editedResult.variableSymbol)} font-mono`} 
+                      placeholder="Missing"
                     />
                 </div>
             </div>
@@ -132,7 +154,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 <textarea 
                   value={editedResult.description || ''} 
                   onChange={e => handleInputChange('description', e.target.value)}
-                  className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm h-16 resize-none" 
+                  className={`${getInputClass(editedResult.description)} h-16 resize-none`} 
+                  placeholder="Missing Description"
                 />
             </div>
 
@@ -143,7 +166,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                       type="number" 
                       value={editedResult.amountWithoutVat || ''} 
                       onChange={e => handleInputChange('amountWithoutVat', parseFloat(e.target.value))}
-                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono text-right" 
+                      className={getNumberInputClass(editedResult.amountWithoutVat)} 
                     />
                 </div>
                 <div>
@@ -152,7 +175,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                       type="number" 
                       value={editedResult.amountWithVat || ''} 
                       onChange={e => handleInputChange('amountWithVat', parseFloat(e.target.value))}
-                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono text-right bg-slate-50" 
+                      className={getNumberInputClass(editedResult.amountWithVat)} 
                     />
                 </div>
             </div>
@@ -164,7 +187,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                        type="text" 
                        value={editedResult.currency || 'CZK'} 
                        onChange={e => handleInputChange('currency', e.target.value)}
-                       className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono uppercase" 
+                       className={`${getInputClass(editedResult.currency)} font-mono uppercase`} 
                      />
                 </div>
             </div>
@@ -175,14 +198,14 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                   type="text" 
                   value={editedResult.bankAccount || ''} 
                   onChange={e => handleInputChange('bankAccount', e.target.value)}
-                  className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono mb-1" 
-                  placeholder="Local"
+                  className={`${getInputClass(editedResult.bankAccount)} font-mono mb-1`} 
+                  placeholder="Local Account"
                 />
                 <input 
                   type="text" 
                   value={editedResult.iban || ''} 
                   onChange={e => handleInputChange('iban', e.target.value)}
-                  className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm font-mono" 
+                  className={`${getInputClass(editedResult.iban)} font-mono`} 
                   placeholder="IBAN"
                 />
             </div>

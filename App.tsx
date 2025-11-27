@@ -45,7 +45,8 @@ function App() {
                          setHasPendingInvite(false);
                          setCurrentProject(null);
                          setCurrentProjectRole(null);
-                    } else {
+                    } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+                        // Pass session user
                         handleUserSession(session?.user ?? null);
                     }
                 });
@@ -76,6 +77,15 @@ function App() {
 
   const handleUserSession = async (currentUser: User | null) => {
     try {
+      // Optimization: If the user ID hasn't changed, don't reload everything
+      // This prevents UI flicker on window focus (TOKEN_REFRESHED events)
+      if (currentUser?.id === user?.id && userProfile) {
+          // just update the user object ref if needed, but skip heavy fetches
+          if (currentUser) setUser(currentUser);
+          setIsLoadingSession(false);
+          return;
+      }
+
       setUser(currentUser);
       if (currentUser) {
         if (currentUser.email) {
