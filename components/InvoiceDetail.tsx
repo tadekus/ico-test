@@ -45,8 +45,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             setAllocations(currentAllocations);
             
             // SMART SUGGESTION LOGIC:
-            // If invoice has NO allocations yet, check history
-            if (currentAllocations.length === 0 && invoice.ico) {
+            // Fetch history regardless of current allocations to allow adding more from history later
+            if (invoice.ico) {
                 try {
                     const history = await fetchVendorBudgetHistory(project.id, invoice.ico);
                     if (history.length > 0) {
@@ -184,6 +184,11 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const invoiceTotal = editedResult?.amountWithoutVat || 0;
   const unallocated = invoiceTotal - totalAllocated;
 
+  // Filter suggestions to show only those NOT yet added to allocations
+  const availableSuggestions = suggestedLines.filter(line => 
+      !allocations.some(a => a.budget_line_id === line.id)
+  );
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 h-[calc(100vh-140px)]">
       
@@ -210,15 +215,15 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                     </span>
                 </div>
 
-                {/* SUGGESTIONS BLOCK */}
-                {suggestedLines.length > 0 && allocations.length === 0 && (
+                {/* SUGGESTIONS BLOCK - High Visibility & Persistence */}
+                {availableSuggestions.length > 0 && (
                     <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
                         <h4 className="text-[10px] font-bold text-amber-700 uppercase mb-2 flex items-center gap-1">
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                             Suggested for this Supplier
                         </h4>
                         <div className="space-y-2">
-                            {suggestedLines.map(line => (
+                            {availableSuggestions.map(line => (
                                 <div key={line.id} className="flex justify-between items-center bg-white p-2 rounded border border-amber-100 shadow-sm">
                                     <div className="min-w-0 flex-1 mr-2">
                                         <div className="font-bold text-slate-800 text-sm truncate">
@@ -306,7 +311,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                             </div>
                         </div>
                     ))}
-                    {allocations.length === 0 && suggestedLines.length === 0 && (
+                    {allocations.length === 0 && availableSuggestions.length === 0 && (
                         <div className="text-center text-[9px] text-slate-400 py-2 italic border border-dashed border-slate-200 rounded">
                             No allocations added
                         </div>

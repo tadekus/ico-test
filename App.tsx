@@ -23,8 +23,9 @@ function App() {
   // TABS
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   
-  // DEEP LINKING STATE
+  // DEEP LINKING & VIEW CONTROL
   const [targetInvoiceId, setTargetInvoiceId] = useState<number | null>(null);
+  const [invoiceModuleKey, setInvoiceModuleKey] = useState(0);
 
   const configStatus = { gemini: !!process.env.API_KEY, supabase: isSupabaseConfigured };
 
@@ -161,12 +162,28 @@ function App() {
       const proj = projectsList.find(p => p.id.toString() === projectId) || null;
       setCurrentProject(proj);
       
+      // Clear deep linking when switching projects
+      setTargetInvoiceId(null);
+      
       if (proj && targetUser) {
           const role = await getProjectRole(targetUser.id, proj.id);
           setCurrentProjectRole(role);
       } else {
           setCurrentProjectRole(null);
       }
+  };
+
+  const handleInvoicingTabClick = () => {
+      // If clicking "Invoicing" while already active, perform a "Reset to List"
+      if (activeTab === 'invoicing' && currentProject) {
+          // Clear the session storage persistence for this project's view state
+          sessionStorage.removeItem(`viewingInvoice_${currentProject.id}`);
+          // Force InvoicingModule to remount/reset by changing key
+          setInvoiceModuleKey(prev => prev + 1);
+          // Clear any deep links
+          setTargetInvoiceId(null);
+      }
+      setActiveTab('invoicing');
   };
 
   const handleSetupSuccess = async () => {
@@ -263,7 +280,7 @@ function App() {
                                     <div className="h-6 w-px bg-slate-200"></div>
                                     <div className="flex bg-slate-100 p-1 rounded-lg">
                                         <button 
-                                            onClick={() => setActiveTab('invoicing')}
+                                            onClick={handleInvoicingTabClick}
                                             className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'invoicing' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                                         >
                                             INVOICING
@@ -311,6 +328,7 @@ function App() {
             <div className="transition-all duration-300">
                 {activeTab === 'invoicing' && canInvoice && (
                     <InvoicingModule 
+                        key={invoiceModuleKey}
                         currentProject={currentProject} 
                         initialInvoiceId={targetInvoiceId}
                     />
