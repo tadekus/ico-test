@@ -24,6 +24,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const [allocationAmount, setAllocationAmount] = useState<number>(0);
   const [selectedBudgetLine, setSelectedBudgetLine] = useState<BudgetLine | null>(null);
   const [isAllocating, setIsAllocating] = useState(false);
+  const [suggestedLines, setSuggestedLines] = useState<BudgetLine[]>([]);
   
   // RESET BUTTON STATE when loading a new invoice (e.g. auto-advance)
   useEffect(() => {
@@ -33,6 +34,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setSelectedBudgetLine(null);
     setAllocationSearch('');
     setAllocationAmount(0); // Ensure amount resets
+    setSuggestedLines([]);
     
     // Load Budget Data & Vendor History
     if (project) {
@@ -42,23 +44,16 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
         fetchInvoiceAllocations(invoice.id).then(async (currentAllocations) => {
             setAllocations(currentAllocations);
             
-            // SMART ALLOCATION LOGIC:
-            // If invoice has NO allocations yet, check history and AUTO-FILL suggestions
+            // SMART SUGGESTION LOGIC:
+            // If invoice has NO allocations yet, check history
             if (currentAllocations.length === 0 && invoice.ico) {
                 try {
                     const history = await fetchVendorBudgetHistory(project.id, invoice.ico);
                     if (history.length > 0) {
-                        // Loop through suggested lines and AUTO-SAVE them with 0 amount
-                        // This populates the list for the user immediately.
-                        for (const line of history) {
-                            await saveInvoiceAllocation(invoice.id, line.id, 0);
-                        }
-                        // Re-fetch to update UI
-                        const updated = await fetchInvoiceAllocations(invoice.id);
-                        setAllocations(updated);
+                        setSuggestedLines(history);
                     }
                 } catch (e) {
-                    console.error("Auto-allocation error:", e);
+                    console.error("Suggestion fetch error:", e);
                 }
             }
         }).catch(console.error);
@@ -173,7 +168,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   };
 
   const formatCurrency = (amount: number) => {
-      return new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount);
+      return new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount).replace(/\s/g, ' ');
   };
 
   // Filter budget lines for search
@@ -208,15 +203,43 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             
             {/* --- BUDGET ALLOCATION SECTION (Moved to Top) --- */}
             <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 shadow-sm">
-                <div className="flex justify-between items-center mb-2">
+                <div className="flex justify-between items-center mb-3">
                     <label className="text-[10px] font-bold text-indigo-600 uppercase tracking-wide">Budget Allocation</label>
                     <span className="text-[9px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
                         {allocations.length} items
                     </span>
                 </div>
+
+                {/* SUGGESTIONS BLOCK */}
+                {suggestedLines.length > 0 && allocations.length === 0 && (
+                    <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
+                        <h4 className="text-[10px] font-bold text-amber-700 uppercase mb-2 flex items-center gap-1">
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                            Suggested for this Supplier
+                        </h4>
+                        <div className="space-y-2">
+                            {suggestedLines.map(line => (
+                                <div key={line.id} className="flex justify-between items-center bg-white p-2 rounded border border-amber-100 shadow-sm">
+                                    <div className="min-w-0 flex-1 mr-2">
+                                        <div className="font-bold text-slate-800 text-sm truncate">
+                                            <span className="font-mono text-indigo-600 mr-2">{line.account_number}</span>
+                                            {line.account_description}
+                                        </div>
+                                    </div>
+                                    <button 
+                                        onClick={() => handleSelectBudgetLine(line)}
+                                        className="text-[10px] font-bold text-white bg-amber-500 hover:bg-amber-600 px-3 py-1.5 rounded transition-colors shadow-sm"
+                                    >
+                                        USE
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
                 
                 {/* Search & Add Row */}
-                <div className="flex gap-2 mb-2 relative">
+                <div className="flex gap-2 mb-3 relative">
                     <div className="flex-1 relative">
                         <input 
                             type="text" 
@@ -256,36 +279,36 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                         type="number"
                         value={allocationAmount}
                         onChange={e => setAllocationAmount(parseFloat(e.target.value))}
-                        className="w-20 text-xs px-2 py-1.5 border rounded text-right outline-none focus:ring-1 focus:ring-indigo-500"
+                        className="w-24 text-xs px-2 py-1.5 border rounded text-right outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
                     />
                     <button 
                         onClick={handleConfirmAllocation}
                         disabled={!selectedBudgetLine || isAllocating}
-                        className="bg-indigo-600 text-white px-3 py-1.5 rounded text-xs font-medium disabled:opacity-50 hover:bg-indigo-700 transition-colors"
+                        className="bg-indigo-600 text-white px-3 py-1.5 rounded text-xs font-medium disabled:opacity-50 hover:bg-indigo-700 transition-colors shadow-sm"
                     >
                         Add
                     </button>
                 </div>
 
                 {/* Allocations List */}
-                <div className="space-y-1 max-h-24 overflow-y-auto mb-2">
+                <div className="space-y-1.5 max-h-36 overflow-y-auto mb-2 pr-1">
                     {allocations.map(alloc => (
-                        <div key={alloc.id} className="flex justify-between items-center text-xs bg-white border border-slate-200 p-1.5 rounded">
+                        <div key={alloc.id} className="flex justify-between items-center text-xs bg-white border border-slate-200 p-2 rounded shadow-sm">
                             <div className="flex-1 min-w-0">
-                                <span className="font-mono font-bold text-indigo-600 mr-2 text-[10px]">{alloc.budget_line?.account_number}</span>
-                                <span className="truncate text-slate-700">{alloc.budget_line?.account_description}</span>
+                                <span className="font-mono font-bold text-indigo-600 mr-2 text-[11px]">{alloc.budget_line?.account_number}</span>
+                                <span className="truncate text-slate-700 font-medium">{alloc.budget_line?.account_description}</span>
                             </div>
                             <div className="flex items-center gap-3 ml-2">
                                 <span className={`font-mono font-medium ${alloc.amount === 0 ? 'text-red-500' : 'text-slate-800'}`}>
                                     {formatCurrency(alloc.amount)}
                                 </span>
-                                <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-[10px]">✕</button>
+                                <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-[10px] font-bold px-1">✕</button>
                             </div>
                         </div>
                     ))}
-                    {allocations.length === 0 && (
-                        <div className="text-center text-[9px] text-slate-400 py-1 italic border border-dashed border-slate-200 rounded">
-                            No allocations
+                    {allocations.length === 0 && suggestedLines.length === 0 && (
+                        <div className="text-center text-[9px] text-slate-400 py-2 italic border border-dashed border-slate-200 rounded">
+                            No allocations added
                         </div>
                     )}
                 </div>
@@ -293,14 +316,20 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 {/* Summary Footer */}
                 <div className="pt-2 border-t border-slate-200 text-xs space-y-1">
                     <div className="flex justify-between items-center">
-                        <span className="text-[9px] text-slate-400 uppercase">Allocated / Total</span>
-                        <div className="font-mono font-bold text-slate-700">
-                            {formatCurrency(totalAllocated)} <span className="text-slate-400 text-[9px] font-normal mx-1">of</span> {formatCurrency(invoiceTotal)}
+                        <span className="text-[9px] text-slate-400 uppercase font-bold">Total Allocated</span>
+                        <div className="font-mono font-bold text-slate-800 text-sm">
+                            {formatCurrency(totalAllocated)}
                         </div>
                     </div>
-                    <div className="flex justify-between items-center pt-1 mt-1">
+                    <div className="flex justify-between items-center">
+                        <span className="text-[9px] text-slate-400 uppercase">Invoice Total (Base)</span>
+                        <div className="font-mono text-slate-500">
+                            {formatCurrency(invoiceTotal)}
+                        </div>
+                    </div>
+                    <div className="flex justify-between items-center pt-1 mt-1 border-t border-slate-100">
                         <span className="text-[9px] text-slate-400 uppercase font-bold">Unallocated</span>
-                        <span className={`font-mono font-bold ${Math.abs(unallocated) > 1 ? (unallocated < 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-300'}`}>
+                        <span className={`font-mono font-bold text-sm ${Math.abs(unallocated) > 1 ? (unallocated < 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-300'}`}>
                             {formatCurrency(unallocated)}
                         </span>
                     </div>
