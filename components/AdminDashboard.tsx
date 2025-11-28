@@ -482,6 +482,8 @@ WITH CHECK (
                                                   return <div key={u.id} className="text-sm text-slate-700">
                                                       <span className="font-medium">{u.full_name}</span> 
                                                       <span className="text-slate-400 text-xs ml-2">{role ? formatRoleName(role) : 'Member'}</span>
+                                                      <div className="text-xs text-slate-500">{u.email}</div>
+                                                      {role && <span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100">{formatRoleName(role)}</span>}
                                                   </div>
                                               })}
                                           </div>
@@ -554,13 +556,48 @@ WITH CHECK (
                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                        <h4 className="font-bold text-slate-700 text-sm p-4 bg-slate-50 border-b border-slate-100">My Team</h4>
                        <table className="w-full text-sm text-left">
-                           <tbody>
-                               {profiles.filter(p => p.invited_by === profile.id).map(p => (
+                           <thead className="bg-slate-50 text-xs text-slate-500 uppercase font-bold border-b border-slate-100">
+                               <tr>
+                                   <th className="px-6 py-2">Member</th>
+                                   <th className="px-6 py-2">Assignments</th>
+                                   <th className="px-6 py-2 text-right">Action</th>
+                               </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-100">
+                               {profiles.filter(p => p.invited_by === profile.id).map(p => {
+                                   const assignments = allOwnerAssignments.filter(a => a.user_id === p.id);
+                                   return (
                                    <tr key={p.id} className="hover:bg-slate-50">
-                                       <td className="px-6 py-3"><div>{p.full_name}</div><div className="text-xs text-slate-500">{p.email}</div></td>
-                                       <td className="px-6 py-3 text-right"><button onClick={() => handleDeleteUser(p)} className="text-red-500">Delete</button></td>
+                                       <td className="px-6 py-3">
+                                           <div className="font-medium text-slate-900">{p.full_name || 'Unknown'}</div>
+                                           <div className="text-xs text-slate-500">{p.email}</div>
+                                       </td>
+                                       <td className="px-6 py-3">
+                                           {assignments.length > 0 ? (
+                                               <div className="space-y-1">
+                                                   {assignments.map(a => (
+                                                       <div key={a.id} className="flex items-center gap-2 text-xs">
+                                                           <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold uppercase text-[10px]">
+                                                               {formatRoleName(a.role)}
+                                                           </span>
+                                                           <span className="text-slate-600 truncate max-w-[150px]" title={a.project?.name}>
+                                                               {a.project?.name}
+                                                           </span>
+                                                       </div>
+                                                   ))}
+                                               </div>
+                                           ) : (
+                                               <span className="text-xs text-slate-400 italic">Unassigned</span>
+                                           )}
+                                       </td>
+                                       <td className="px-6 py-3 text-right">
+                                           <button onClick={() => handleDeleteUser(p)} className="text-red-500 hover:text-red-700 text-xs font-medium">Delete</button>
+                                       </td>
                                    </tr>
-                               ))}
+                               )})}
+                               {profiles.filter(p => p.invited_by === profile.id).length === 0 && (
+                                   <tr><td colSpan={3} className="px-6 py-8 text-center text-slate-400 italic">No active team members.</td></tr>
+                               )}
                            </tbody>
                        </table>
                    </div>
