@@ -331,15 +331,40 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V29: VISIBILITY FIXES ===
+-- === REPAIR V30: PRODUCER APPROVAL WORKFLOW ===
 
--- 1. Normalize Variable Symbols (Remove spaces to ensure matching)
-UPDATE invoices 
-SET variable_symbol = REGEXP_REPLACE(variable_symbol, '[^a-zA-Z0-9]', '', 'g')
-WHERE variable_symbol IS NOT NULL;
+-- 1. Add Rejection Reason Column
+DO $$ 
+BEGIN
+    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rejection_reason text;
+EXCEPTION 
+    WHEN others THEN null;
+END $$;
 
--- 2. Open Read Access for Team Members (Invoices)
--- Allows Line Producers to see existing invoices for duplicate checks/history
+-- 2. Update Policies to Lock Final Approved Invoices
+DROP POLICY IF EXISTS "Team Update Invoices" ON invoices;
+CREATE POLICY "Team Update Invoices" ON invoices FOR UPDATE TO authenticated
+USING (
+  -- Can update only if it's NOT final approved
+  status != 'final_approved' 
+  AND (
+      -- If I own the project (Superuser)
+      EXISTS (SELECT 1 FROM projects WHERE id = invoices.project_id AND created_by = auth.uid())
+      OR
+      -- If I am assigned to the project (LP/Producer)
+      EXISTS (SELECT 1 FROM project_assignments WHERE project_id = invoices.project_id AND user_id = auth.uid())
+  )
+)
+WITH CHECK (
+  -- Same condition for the new state of the row
+  status != 'final_approved' OR 
+  -- EXCEPTION: Producers/Superusers CAN set status to final_approved, but once set, it locks on next update
+  EXISTS (SELECT 1 FROM project_assignments WHERE project_id = invoices.project_id AND user_id = auth.uid() AND role = 'producer')
+  OR
+  EXISTS (SELECT 1 FROM projects WHERE id = invoices.project_id AND created_by = auth.uid())
+);
+
+-- 3. Ensure Team Read Access includes rejection details
 DROP POLICY IF EXISTS "Team Read Invoices" ON invoices;
 CREATE POLICY "Team Read Invoices" ON invoices FOR SELECT TO authenticated
 USING (
@@ -349,34 +374,10 @@ USING (
     AND project_assignments.user_id = auth.uid()
   )
   OR
-  -- Also allow Project Owners (Superusers)
   EXISTS (
     SELECT 1 FROM projects
     WHERE projects.id = invoices.project_id
     AND projects.created_by = auth.uid()
-  )
-);
-
--- 3. Open Read Access for Allocations (For History)
-DROP POLICY IF EXISTS "Team Read Allocations" ON invoice_allocations;
-CREATE POLICY "Team Read Allocations" ON invoice_allocations FOR SELECT TO authenticated
-USING (
-  EXISTS (
-    SELECT 1 FROM invoices
-    JOIN project_assignments ON project_assignments.project_id = invoices.project_id
-    WHERE invoices.id = invoice_allocations.invoice_id
-    AND project_assignments.user_id = auth.uid()
-  )
-);
-
--- 4. Re-Apply Insert Permissions just in case
-DROP POLICY IF EXISTS "Team Insert Invoices" ON invoices;
-CREATE POLICY "Team Insert Invoices" ON invoices FOR INSERT TO authenticated
-WITH CHECK (
-  EXISTS (
-    SELECT 1 FROM project_assignments
-    WHERE project_assignments.project_id = invoices.project_id
-    AND project_assignments.user_id = auth.uid()
   )
 );
 `;

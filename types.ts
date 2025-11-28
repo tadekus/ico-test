@@ -30,7 +30,8 @@ export interface SavedInvoice {
   raw_text: string | null;
   user_id: string; // The uploader
   project_id?: number | null; // Linked project
-  status: 'draft' | 'approved';
+  status: 'draft' | 'approved' | 'final_approved' | 'rejected';
+  rejection_reason?: string | null;
   file_content?: string | null; // Base64 content for preview
   allocations?: InvoiceAllocation[]; // Joined allocations
 }

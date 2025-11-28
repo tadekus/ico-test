@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import InvoicingModule from './components/InvoicingModule';
 import CostReportModule from './components/CostReportModule';
 import AdminDashboard from './components/AdminDashboard';
+import ApprovalModule from './components/ApprovalModule';
 import Auth, { SetupAccount } from './components/Auth';
 import { Profile, Project, ProjectRole } from './types';
 import { isSupabaseConfigured, signOut, supabase, getUserProfile, checkMyPendingInvitation, acceptInvitation, fetchAssignedProjects, getProjectRole } from './services/supabaseService';
@@ -74,10 +75,9 @@ function App() {
     if (isAdmin || isSuperuser) {
       setActiveTab('admin');
     } else if (currentProject && currentProjectRole === 'lineproducer') {
-      // Default to invoicing if just logged in/switched project, but respect user choice if already on costreport
-      if (activeTab !== 'costreport') {
-          setActiveTab('invoicing');
-      }
+      if (activeTab !== 'costreport') setActiveTab('invoicing');
+    } else if (currentProject && currentProjectRole === 'producer') {
+      if (activeTab !== 'costreport') setActiveTab('approval');
     } else {
       setActiveTab('dashboard');
     }
@@ -114,8 +114,6 @@ function App() {
         // Load Projects with Retry Logic
         let projects = await fetchAssignedProjects(currentUser.id);
         
-        // If regular user (Line Producer) has 0 projects, it might be a race condition.
-        // Wait and retry once to prevent the "No Projects" flash.
         if (projects.length === 0 && profile?.app_role === 'user') {
              await new Promise(r => setTimeout(r, 800)); // Wait 800ms
              projects = await fetchAssignedProjects(currentUser.id);
@@ -123,15 +121,15 @@ function App() {
 
         setAssignedProjects(projects);
         
-        // AUTO-REDIRECT LOGIC
-        // If regular user (Line Producer), instantly pick first project and go there.
+        // AUTO-REDIRECT LOGIC (For Regular Users)
         if (projects.length > 0 && profile?.app_role === 'user') {
             setIsRedirecting(true);
-            // Ensure we don't flash dashboard by keeping loading true effectively via isRedirecting
             try {
               await handleProjectChange(projects[0].id.toString(), projects, currentUser);
-              // Explicitly set tab here to ensure it's ready before render
-              setActiveTab('invoicing'); 
+              // Explicitly set tab based on role we just fetched
+              const role = await getProjectRole(currentUser.id, projects[0].id);
+              if (role === 'lineproducer') setActiveTab('invoicing');
+              if (role === 'producer') setActiveTab('approval');
             } catch (err) {
               console.error("Auto-redirect failed", err);
             } finally {
@@ -162,7 +160,6 @@ function App() {
       const proj = projectsList.find(p => p.id.toString() === projectId) || null;
       setCurrentProject(proj);
       
-      // Clear deep linking when switching projects
       setTargetInvoiceId(null);
       
       if (proj && targetUser) {
@@ -174,13 +171,9 @@ function App() {
   };
 
   const handleInvoicingTabClick = () => {
-      // If clicking "Invoicing" while already active, perform a "Reset to List"
       if (activeTab === 'invoicing' && currentProject) {
-          // Clear the session storage persistence for this project's view state
           sessionStorage.removeItem(`viewingInvoice_${currentProject.id}`);
-          // Force InvoicingModule to remount/reset by changing key
           setInvoiceModuleKey(prev => prev + 1);
-          // Clear any deep links
           setTargetInvoiceId(null);
       }
       setActiveTab('invoicing');
@@ -190,7 +183,7 @@ function App() {
     if (user?.email) { 
         await acceptInvitation(user.email); 
         setHasPendingInvite(false); 
-        await handleSignOut(); // Force re-login after setup
+        await handleSignOut(); 
         alert("Setup complete! Please sign in."); 
     }
   };
@@ -201,7 +194,6 @@ function App() {
       } catch (e) {
         console.error("Signout error", e);
       } finally {
-        // Force state clear
         setUser(null); 
         setUserProfile(null); 
         setHasPendingInvite(false); 
@@ -211,13 +203,12 @@ function App() {
       }
   };
   
-  // Navigation Handler from Cost Report
   const handleNavigateToInvoice = (invoiceId: number) => {
       setTargetInvoiceId(invoiceId);
-      setActiveTab('invoicing');
+      if (currentProjectRole === 'lineproducer') setActiveTab('invoicing');
+      if (currentProjectRole === 'producer') setActiveTab('approval');
   };
 
-  // DYNAMIC HEADER LABEL
   let headerRole = 'User';
   if (currentProjectRole) {
       switch(currentProjectRole) {
@@ -231,9 +222,9 @@ function App() {
       headerRole = 'Superuser';
   }
 
-  const canInvoice = currentProjectRole === 'lineproducer';
+  const isLineProducer = currentProjectRole === 'lineproducer';
+  const isProducer = currentProjectRole === 'producer';
 
-  // BLOCK RENDER UNTIL READY
   if (isLoadingSession || isRedirecting) return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
           <div className="flex flex-col items-center gap-4">
@@ -274,23 +265,22 @@ function App() {
                                 </select>
                             </div>
 
-                            {/* LINE PRODUCER TAB SWITCHER */}
-                            {canInvoice && (
+                            {isLineProducer && (
                                 <>
                                     <div className="h-6 w-px bg-slate-200"></div>
                                     <div className="flex bg-slate-100 p-1 rounded-lg">
-                                        <button 
-                                            onClick={handleInvoicingTabClick}
-                                            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'invoicing' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                                        >
-                                            INVOICING
-                                        </button>
-                                        <button 
-                                            onClick={() => setActiveTab('costreport')}
-                                            className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'costreport' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-                                        >
-                                            COST REPORT
-                                        </button>
+                                        <button onClick={handleInvoicingTabClick} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'invoicing' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>INVOICING</button>
+                                        <button onClick={() => setActiveTab('costreport')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'costreport' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>COST REPORT</button>
+                                    </div>
+                                </>
+                            )}
+                            
+                            {isProducer && (
+                                <>
+                                    <div className="h-6 w-px bg-slate-200"></div>
+                                    <div className="flex bg-slate-100 p-1 rounded-lg">
+                                        <button onClick={() => setActiveTab('approval')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'approval' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>APPROVAL</button>
+                                        <button onClick={() => setActiveTab('costreport')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'costreport' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>COST REPORT</button>
                                     </div>
                                 </>
                             )}
@@ -326,7 +316,7 @@ function App() {
             )}
 
             <div className="transition-all duration-300">
-                {activeTab === 'invoicing' && canInvoice && (
+                {activeTab === 'invoicing' && isLineProducer && (
                     <InvoicingModule 
                         key={invoiceModuleKey}
                         currentProject={currentProject} 
@@ -334,7 +324,11 @@ function App() {
                     />
                 )}
                 
-                {activeTab === 'costreport' && canInvoice && currentProject && (
+                {activeTab === 'approval' && isProducer && currentProject && (
+                    <ApprovalModule currentProject={currentProject} />
+                )}
+                
+                {activeTab === 'costreport' && (isLineProducer || isProducer) && currentProject && (
                     <CostReportModule 
                         currentProject={currentProject} 
                         onNavigateToInvoice={handleNavigateToInvoice}
