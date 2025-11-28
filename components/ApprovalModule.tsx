@@ -32,7 +32,11 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
 
   const handleInvoiceUpdated = (nextId?: number | null) => {
       loadData();
-      setViewingInvoiceId(null);
+      if (nextId) {
+          setViewingInvoiceId(nextId);
+      } else {
+          setViewingInvoiceId(null);
+      }
   };
 
   const pendingInvoices = invoices.filter(i => i.status === 'approved'); // Ready for Producer Review
@@ -46,6 +50,15 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
   };
 
   const activeInvoice = invoices.find(i => i.id === viewingInvoiceId);
+
+  // Calculate next invoice ID for auto-advance in Pending tab
+  let nextReviewId: number | null = null;
+  if (activeTab === 'pending' && viewingInvoiceId) {
+      const currentIndex = pendingInvoices.findIndex(i => i.id === viewingInvoiceId);
+      if (currentIndex !== -1 && currentIndex < pendingInvoices.length - 1) {
+          nextReviewId = pendingInvoices[currentIndex + 1].id;
+      }
+  }
 
   if (viewingInvoiceId && activeInvoice) {
       // Map to FileData for detail view compatibility
@@ -76,7 +89,7 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
               invoice={activeInvoice}
               fileData={fileData}
               project={currentProject}
-              nextDraftId={null}
+              nextDraftId={nextReviewId}
               onBack={() => setViewingInvoiceId(null)}
               onSaved={handleInvoiceUpdated}
               userRole="producer" // Explicitly pass role to enable approval controls

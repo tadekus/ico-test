@@ -91,7 +91,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
       
       setSaveStatus('success');
       setTimeout(() => {
-          if (nextDraftId && targetStatus === 'approved') {
+          // Advance if Approved/FinalApproved AND Next ID exists
+          if (nextDraftId && (targetStatus === 'approved' || targetStatus === 'final_approved')) {
              onSaved(nextDraftId);
           } else {
              onSaved(null);
@@ -105,9 +106,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 
   const handleProducerAction = (action: 'approve' | 'reject') => {
       if (action === 'approve') {
-          if(window.confirm("Approve this invoice? It will be locked from further editing.")) {
-              handleSave('final_approved');
-          }
+          // Direct approval without confirmation dialog
+          handleSave('final_approved');
       } else {
           setShowRejectModal(true);
       }
@@ -228,7 +228,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                     </span>
                 </div>
 
-                {!isLocked && availableSuggestions.length > 0 && (
+                {/* SUGGESTIONS: Hide if Locked OR Producer */}
+                {!isLocked && !isProducer && availableSuggestions.length > 0 && (
                     <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
                         <h4 className="text-[10px] font-bold text-amber-700 uppercase mb-2">Suggested for this Supplier</h4>
                         <div className="space-y-2">
@@ -247,7 +248,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                     </div>
                 )}
                 
-                {!isLocked && (
+                {/* SEARCH & ADD: Hide if Locked OR Producer */}
+                {!isLocked && !isProducer && (
                     <div className="flex gap-2 mb-3 relative">
                         <div className="flex-1 relative">
                             <input 
@@ -284,7 +286,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                             </div>
                             <div className="flex items-center gap-3 ml-2">
                                 <span className={`font-mono font-medium ${alloc.amount === 0 ? 'text-red-500' : 'text-slate-800'}`}>{formatCurrency(alloc.amount)}</span>
-                                {!isLocked && <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-[10px] font-bold px-1">✕</button>}
+                                {/* REMOVE: Hide if Locked OR Producer */}
+                                {!isLocked && !isProducer && <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-[10px] font-bold px-1">✕</button>}
                             </div>
                         </div>
                     ))}

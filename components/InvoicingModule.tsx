@@ -323,20 +323,22 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                        {savedInvoices.map(inv => (
                            <tr key={inv.id} 
                                onClick={() => setViewingInvoiceId(inv.id)}
-                               className="hover:bg-slate-50 transition-colors cursor-pointer group"
+                               className={`hover:bg-slate-50 transition-colors cursor-pointer group ${inv.status === 'rejected' ? 'bg-red-50 border-red-200' : ''}`}
                            >
                                <td className="px-6 py-3 font-mono text-indigo-600 font-bold group-hover:text-indigo-800 whitespace-nowrap">
                                    #{inv.internal_id || '-'}
                                </td>
                                <td className="px-6 py-3 whitespace-nowrap">
                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide
-                                       ${inv.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                       ${inv.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 
+                                         inv.status === 'rejected' ? 'bg-red-100 text-red-700' : 
+                                         'bg-amber-100 text-amber-700'}`}>
                                        {inv.status}
                                    </span>
                                </td>
                                <td className="px-6 py-3 whitespace-nowrap">
-                                   <div className="font-medium text-slate-900 truncate max-w-[200px]">{inv.company_name || 'Unknown'}</div>
-                                   <div className="text-xs text-slate-500 font-mono">{inv.ico || '-'}</div>
+                                   <div className={`font-medium truncate max-w-[200px] ${inv.status === 'rejected' ? 'text-red-900' : 'text-slate-900'}`}>{inv.company_name || 'Unknown'}</div>
+                                   <div className={`text-xs font-mono ${inv.status === 'rejected' ? 'text-red-500' : 'text-slate-500'}`}>{inv.ico || '-'}</div>
                                </td>
                                <td className="px-6 py-3 text-slate-600 max-w-xs truncate whitespace-nowrap">
                                    {inv.description || '-'}
