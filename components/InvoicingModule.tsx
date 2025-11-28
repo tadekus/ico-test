@@ -18,6 +18,9 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   
+  // List View State
+  const [activeListTab, setActiveListTab] = useState<'processing' | 'final_approved'>('processing');
+  
   // Budget Management State
   const [budgetList, setBudgetList] = useState<Budget[]>([]);
   const [uploadingBudget, setUploadingBudget] = useState(false);
@@ -213,6 +216,17 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
   const draftInvoices = savedInvoices.filter(inv => inv.status === 'draft' && inv.id !== viewingInvoiceId);
   const nextDraftId = draftInvoices.length > 0 ? draftInvoices[0].id : null;
 
+  // Filter Invoices based on Tab
+  const displayedInvoices = savedInvoices.filter(inv => {
+      if (activeListTab === 'processing') {
+          // Show Draft, Approved (Pending Producer), and Rejected
+          return ['draft', 'approved', 'rejected'].includes(inv.status);
+      } else {
+          // Show Final Approved only
+          return inv.status === 'final_approved';
+      }
+  });
+
   // Map SavedInvoice to FileData structure for InvoiceDetail
   const mappedFileData: FileData | null = activeInvoice ? {
       id: activeInvoice.id.toString(),
@@ -293,10 +307,27 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
        {/* RIGHT COLUMN: PROJECT INVOICE LIST (3/4 width) */}
        <div className="lg:col-span-3 bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[750px]">
            <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
-               <div>
-                   <h3 className="font-bold text-slate-800">Project Invoices</h3>
-                   <p className="text-xs text-slate-500">{currentProject ? currentProject.name : 'No Project Selected'}</p>
+               <div className="flex items-center gap-4">
+                   <div>
+                       <h3 className="font-bold text-slate-800">Project Invoices</h3>
+                       <p className="text-xs text-slate-500">{currentProject ? currentProject.name : 'No Project Selected'}</p>
+                   </div>
+                   <div className="flex bg-white rounded-lg p-1 border border-slate-200 ml-4">
+                        <button 
+                            onClick={() => setActiveListTab('processing')}
+                            className={`px-3 py-1 text-xs font-bold rounded transition-colors ${activeListTab === 'processing' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                        >
+                            Processing ({savedInvoices.filter(i => ['draft', 'approved', 'rejected'].includes(i.status)).length})
+                        </button>
+                        <button 
+                            onClick={() => setActiveListTab('final_approved')}
+                            className={`px-3 py-1 text-xs font-bold rounded transition-colors ${activeListTab === 'final_approved' ? 'bg-emerald-100 text-emerald-700' : 'text-slate-500 hover:bg-slate-50'}`}
+                        >
+                            Approved ({savedInvoices.filter(i => i.status === 'final_approved').length})
+                        </button>
+                   </div>
                </div>
+               
                <div className="flex items-center gap-4">
                    {/* BUDGET SETTINGS BUTTON */}
                    <button onClick={() => setShowBudgetModal(true)} className="text-xs font-medium text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-3 py-1.5 rounded flex items-center gap-1">
@@ -320,7 +351,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                        </tr>
                    </thead>
                    <tbody className="divide-y divide-slate-100">
-                       {savedInvoices.map(inv => (
+                       {displayedInvoices.map(inv => (
                            <tr key={inv.id} 
                                onClick={() => setViewingInvoiceId(inv.id)}
                                className={`hover:bg-slate-50 transition-colors cursor-pointer group ${inv.status === 'rejected' ? 'bg-red-50 border-red-200' : ''}`}
@@ -331,9 +362,10 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                                <td className="px-6 py-3 whitespace-nowrap">
                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide
                                        ${inv.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 
+                                         inv.status === 'final_approved' ? 'bg-indigo-100 text-indigo-700' :
                                          inv.status === 'rejected' ? 'bg-red-100 text-red-700' : 
                                          'bg-amber-100 text-amber-700'}`}>
-                                       {inv.status}
+                                       {inv.status === 'approved' ? 'pending producer' : inv.status}
                                    </span>
                                </td>
                                <td className="px-6 py-3 whitespace-nowrap">
@@ -359,11 +391,10 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                                </td>
                            </tr>
                        ))}
-                       {savedInvoices.length === 0 && (
+                       {displayedInvoices.length === 0 && (
                            <tr>
                                <td colSpan={6} className="px-6 py-20 text-center text-slate-400 italic">
-                                   No invoices processed for this project yet.
-                                   <br/>Upload files to get started.
+                                   No invoices in {activeListTab === 'processing' ? 'processing' : 'archive'}.
                                </td>
                            </tr>
                        )}
