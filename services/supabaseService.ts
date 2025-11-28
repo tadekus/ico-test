@@ -121,6 +121,17 @@ export const adminResetPassword = async (userId: string, newPassword: string) =>
   if (error) throw new Error(`Failed to reset password: ${error.message}`);
 };
 
+export const superuserResetPassword = async (userId: string, newPassword: string) => {
+  if (!supabase) throw new Error("Supabase not configured");
+  
+  const { error } = await supabase.rpc('superuser_reset_password', {
+    target_user_id: userId,
+    new_password: newPassword
+  });
+
+  if (error) throw new Error(`Failed to reset team member password: ${error.message}`);
+};
+
 export const deleteProfile = async (userId: string) => {
   if (!supabase) throw new Error("Supabase not configured");
   const { error } = await supabase.rpc('delete_team_member', { target_user_id: userId });

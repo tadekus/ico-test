@@ -16,6 +16,7 @@ import {
   removeProjectAssignment,
   fetchAssignmentsForOwner,
   adminResetPassword,
+  superuserResetPassword,
   deleteProfile
 } from '../services/supabaseService';
 import { Profile, UserInvitation, Project, ProjectAssignment, ProjectRole, AppRole } from '../types';
@@ -249,7 +250,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
       }
       setIsResetting(true);
       try {
-          await adminResetPassword(resetTarget.id, newPassword);
+          if (isAdmin) {
+              await adminResetPassword(resetTarget.id, newPassword);
+          } else {
+              // Superuser logic
+              await superuserResetPassword(resetTarget.id, newPassword);
+          }
           setSuccessMsg(`Password updated for ${resetTarget.email}`);
           setResetTarget(null);
           setNewPassword('');
@@ -331,55 +337,39 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V30: PRODUCER APPROVAL WORKFLOW ===
+-- === REPAIR V31: SUPERUSER PASSWORD RESET ===
 
--- 1. Add Rejection Reason Column
-DO $$ 
+-- 1. Create Function for Superusers to reset passwords of their own invitees
+CREATE OR REPLACE FUNCTION superuser_reset_password(target_user_id uuid, new_password text)
+RETURNS void AS $$
+DECLARE
+  is_inviter boolean;
+  enc_pw text;
 BEGIN
-    ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rejection_reason text;
-EXCEPTION 
-    WHEN others THEN null;
-END $$;
+  -- Verify if current user (superuser) invited the target user
+  SELECT EXISTS(
+    SELECT 1 FROM profiles 
+    WHERE id = target_user_id AND invited_by = auth.uid()
+  ) INTO is_inviter;
 
--- 2. Update Policies to Lock Final Approved Invoices
-DROP POLICY IF EXISTS "Team Update Invoices" ON invoices;
-CREATE POLICY "Team Update Invoices" ON invoices FOR UPDATE TO authenticated
-USING (
-  -- Can update only if it's NOT final approved
-  status != 'final_approved' 
-  AND (
-      -- If I own the project (Superuser)
-      EXISTS (SELECT 1 FROM projects WHERE id = invoices.project_id AND created_by = auth.uid())
-      OR
-      -- If I am assigned to the project (LP/Producer)
-      EXISTS (SELECT 1 FROM project_assignments WHERE project_id = invoices.project_id AND user_id = auth.uid())
-  )
-)
-WITH CHECK (
-  -- Same condition for the new state of the row
-  status != 'final_approved' OR 
-  -- EXCEPTION: Producers/Superusers CAN set status to final_approved, but once set, it locks on next update
-  EXISTS (SELECT 1 FROM project_assignments WHERE project_id = invoices.project_id AND user_id = auth.uid() AND role = 'producer')
-  OR
-  EXISTS (SELECT 1 FROM projects WHERE id = invoices.project_id AND created_by = auth.uid())
-);
+  IF NOT is_inviter THEN
+    RAISE EXCEPTION 'Permission denied: You can only change passwords for users you invited.';
+  END IF;
 
--- 3. Ensure Team Read Access includes rejection details
-DROP POLICY IF EXISTS "Team Read Invoices" ON invoices;
-CREATE POLICY "Team Read Invoices" ON invoices FOR SELECT TO authenticated
-USING (
-  EXISTS (
-    SELECT 1 FROM project_assignments
-    WHERE project_assignments.project_id = invoices.project_id
-    AND project_assignments.user_id = auth.uid()
-  )
-  OR
-  EXISTS (
-    SELECT 1 FROM projects
-    WHERE projects.id = invoices.project_id
-    AND projects.created_by = auth.uid()
-  )
-);
+  -- Ensure pgcrypto extension is available in extensions schema
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN
+    CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
+  END IF;
+
+  -- Encrypt password
+  enc_pw := extensions.crypt(new_password, extensions.gen_salt('bf'));
+
+  -- Update auth.users
+  UPDATE auth.users
+  SET encrypted_password = enc_pw
+  WHERE id = target_user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 `;
 
   const pendingSystemInvites = invitations.filter(inv => inv.target_app_role === 'admin' || inv.target_app_role === 'superuser');
@@ -436,7 +426,7 @@ USING (
                                 <td className="px-6 py-4"><div>{p.full_name}</div><div className="text-xs">{p.email}</div></td>
                                 <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-xs font-bold">{p.app_role}</span></td>
                                 <td className="px-6 py-4 flex gap-2">
-                                    <button onClick={() => setResetTarget(p)} className="text-indigo-600">Key</button>
+                                    <button onClick={() => setResetTarget(p)} className="text-indigo-600 hover:text-indigo-800 text-xs font-medium bg-indigo-50 px-2 py-1 rounded">Password</button>
                                     {p.id !== profile.id && <button onClick={() => handleDeleteUser(p)} className="text-red-500">Del</button>}
                                 </td>
                             </tr>
@@ -460,6 +450,10 @@ USING (
                       <select value={projectCurrency} onChange={e => setProjectCurrency(e.target.value)} className="px-3 py-2 border rounded text-sm"><option value="CZK">CZK</option><option value="EUR">EUR</option></select>
                   </div>
                   <button onClick={handleCreateProject} disabled={isCreatingProject} className="mt-4 bg-indigo-600 text-white px-6 py-2 rounded text-sm">Create</button>
+                  <div className="mt-6 pt-4 border-t border-slate-100">
+                        <button onClick={() => setShowSql(!showSql)} className="text-xs text-slate-400 underline">{showSql ? 'Hide SQL' : 'Show Database Migration SQL'}</button>
+                        {showSql && <pre className="mt-2 bg-slate-900 text-slate-300 p-3 rounded text-xs overflow-x-auto">{getMigrationSql()}</pre>}
+                  </div>
                </div>
                
                {/* Hidden file input */}
@@ -482,9 +476,8 @@ USING (
                                                   const role = allOwnerAssignments.find(a => a.project_id === proj.id && a.user_id === u.id)?.role;
                                                   return <div key={u.id} className="text-sm text-slate-700">
                                                       <span className="font-medium">{u.full_name}</span> 
-                                                      <span className="text-slate-400 text-xs ml-2">{role ? formatRoleName(role) : 'Member'}</span>
-                                                      <div className="text-xs text-slate-500">{u.email}</div>
-                                                      {role && <span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100">{formatRoleName(role)}</span>}
+                                                      <span className="text-slate-400 text-xs ml-2">{u.email}</span>
+                                                      {role && <span className="ml-2 text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100">{formatRoleName(role)}</span>}
                                                   </div>
                                               })}
                                           </div>
@@ -542,6 +535,10 @@ USING (
                        </select>
                        <button type="submit" disabled={isInviting} className="bg-indigo-600 text-white py-2 rounded text-sm">Invite</button>
                    </form>
+                   <div className="mt-6 pt-4 border-t border-slate-100">
+                        <button onClick={() => setShowSql(!showSql)} className="text-xs text-slate-400 underline">{showSql ? 'Hide SQL' : 'Show Database Migration SQL'}</button>
+                        {showSql && <pre className="mt-2 bg-slate-900 text-slate-300 p-3 rounded text-xs overflow-x-auto">{getMigrationSql()}</pre>}
+                   </div>
                </div>
                <div className="lg:col-span-2 space-y-8">
                    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -591,7 +588,8 @@ USING (
                                                <span className="text-xs text-slate-400 italic">Unassigned</span>
                                            )}
                                        </td>
-                                       <td className="px-6 py-3 text-right">
+                                       <td className="px-6 py-3 text-right flex items-center justify-end gap-2">
+                                           <button onClick={() => setResetTarget(p)} className="text-indigo-600 hover:text-indigo-800 text-xs font-medium px-2 py-1 bg-indigo-50 rounded">Password</button>
                                            <button onClick={() => handleDeleteUser(p)} className="text-red-500 hover:text-red-700 text-xs font-medium">Delete</button>
                                        </td>
                                    </tr>
@@ -611,8 +609,9 @@ USING (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
             <div className="bg-white p-6 rounded-xl w-full max-w-sm">
                 <h3 className="font-bold mb-4">Reset Password</h3>
-                <input type="text" value={newPassword} onChange={e => setNewPassword(e.target.value)} className="w-full border p-2 rounded mb-4" />
-                <button onClick={handlePasswordReset} className="bg-indigo-600 text-white px-4 py-2 rounded mr-2">Save</button>
+                <p className="text-xs text-slate-500 mb-4">For user: {resetTarget.email}</p>
+                <input type="text" value={newPassword} onChange={e => setNewPassword(e.target.value)} className="w-full border p-2 rounded mb-4" placeholder="New Password" />
+                <button onClick={handlePasswordReset} className="bg-indigo-600 text-white px-4 py-2 rounded mr-2" disabled={isResetting}>{isResetting ? 'Saving...' : 'Save'}</button>
                 <button onClick={() => setResetTarget(null)} className="text-slate-500">Cancel</button>
             </div>
         </div>
@@ -631,14 +630,14 @@ USING (
                   <div className="space-y-2 max-h-96 overflow-y-auto">
                     {projectAssignments.map(a => (
                         <div key={a.id} className="flex justify-between items-center p-3 border-b hover:bg-slate-50 transition-colors">
-                            <div>
+                            <div className="flex flex-col">
                                 <div className="flex items-center gap-2">
                                     <span className="font-medium text-slate-800">{a.profile?.full_name || 'Unknown User'}</span>
+                                    <span className="text-[10px] text-slate-500">{a.profile?.email}</span>
                                     <span className="text-[10px] uppercase font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-100">
                                         {formatRoleName(a.role)}
                                     </span>
                                 </div>
-                                <div className="text-xs text-slate-500">{a.profile?.email}</div>
                             </div>
                             <button onClick={() => handleRemoveAssignment(a.id)} className="text-red-500 hover:text-red-700 text-sm font-medium px-2 py-1">
                                 Remove
