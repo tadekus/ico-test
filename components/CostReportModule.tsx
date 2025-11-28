@@ -1,16 +1,22 @@
 
 import React, { useState, useEffect } from 'react';
 import { Project, BudgetLine } from '../types';
-import { fetchProjectCostReport } from '../services/supabaseService';
+import { fetchProjectCostReport, fetchAllocationsForBudgetLine } from '../services/supabaseService';
 
 interface CostReportModuleProps {
   currentProject: Project;
+  onNavigateToInvoice?: (invoiceId: number) => void;
 }
 
-const CostReportModule: React.FC<CostReportModuleProps> = ({ currentProject }) => {
+const CostReportModule: React.FC<CostReportModuleProps> = ({ currentProject, onNavigateToInvoice }) => {
   const [reportLines, setReportLines] = useState<BudgetLine[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Drill-down State
+  const [selectedLine, setSelectedLine] = useState<BudgetLine | null>(null);
+  const [lineDetails, setLineDetails] = useState<any[]>([]);
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -19,6 +25,25 @@ const CostReportModule: React.FC<CostReportModuleProps> = ({ currentProject }) =
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [currentProject.id]);
+
+  const handleRowClick = async (line: BudgetLine) => {
+      setSelectedLine(line);
+      setLoadingDetails(true);
+      try {
+          const details = await fetchAllocationsForBudgetLine(line.id);
+          setLineDetails(details);
+      } catch (e) {
+          console.error(e);
+      } finally {
+          setLoadingDetails(false);
+      }
+  };
+
+  const handleDetailClick = (invoiceId: number) => {
+      if (onNavigateToInvoice) {
+          onNavigateToInvoice(invoiceId);
+      }
+  };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('cs-CZ', { 
@@ -38,7 +63,7 @@ const CostReportModule: React.FC<CostReportModuleProps> = ({ currentProject }) =
   const totalRemaining = totalBudget - totalSpent;
 
   return (
-    <div className="bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[calc(100vh-120px)]">
+    <div className="bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[calc(100vh-120px)] relative">
       {/* Header & Totals */}
       <div className="p-6 border-b border-slate-200 bg-slate-50 shrink-0">
         <div className="flex justify-between items-start mb-6">
@@ -100,7 +125,11 @@ const CostReportModule: React.FC<CostReportModuleProps> = ({ currentProject }) =
                           const isOver = remaining < 0;
 
                           return (
-                              <tr key={line.id} className="hover:bg-slate-50">
+                              <tr 
+                                  key={line.id} 
+                                  className="hover:bg-indigo-50 cursor-pointer transition-colors"
+                                  onClick={() => handleRowClick(line)}
+                              >
                                   <td className="px-6 py-3 font-mono text-slate-600 font-medium">{line.account_number}</td>
                                   <td className="px-6 py-3 font-medium text-slate-800">{line.account_description}</td>
                                   <td className="px-6 py-3 text-slate-500 text-xs">{line.category_description}</td>
@@ -127,6 +156,62 @@ const CostReportModule: React.FC<CostReportModuleProps> = ({ currentProject }) =
               </table>
           )}
       </div>
+
+      {/* DRILL-DOWN MODAL */}
+      {selectedLine && (
+          <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[80vh]">
+                  <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                      <div>
+                          <h3 className="font-bold text-slate-800 text-lg">{selectedLine.account_number} - {selectedLine.account_description}</h3>
+                          <p className="text-xs text-slate-500">Allocated Invoices</p>
+                      </div>
+                      <button onClick={() => setSelectedLine(null)} className="text-slate-400 hover:text-slate-600">
+                          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                      </button>
+                  </div>
+                  
+                  <div className="p-4 overflow-y-auto flex-1">
+                      {loadingDetails ? (
+                          <div className="flex justify-center p-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div></div>
+                      ) : lineDetails.length === 0 ? (
+                          <p className="text-center text-slate-400 italic py-8">No invoices allocated to this line.</p>
+                      ) : (
+                          <table className="w-full text-sm text-left">
+                              <thead className="text-slate-500 font-medium border-b border-slate-100">
+                                  <tr>
+                                      <th className="pb-2">Invoice #</th>
+                                      <th className="pb-2">Supplier</th>
+                                      <th className="pb-2">Description</th>
+                                      <th className="pb-2 text-right">Amount</th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-50">
+                                  {lineDetails.map((item, idx) => (
+                                      <tr 
+                                          key={idx} 
+                                          className="hover:bg-indigo-50 cursor-pointer group"
+                                          onClick={() => handleDetailClick(item.id)}
+                                      >
+                                          <td className="py-3 font-mono text-indigo-600 group-hover:underline">#{item.internal_id}</td>
+                                          <td className="py-3">{item.company_name}</td>
+                                          <td className="py-3 text-slate-500 truncate max-w-xs">{item.description}</td>
+                                          <td className="py-3 text-right font-mono font-bold text-slate-700">{formatCurrency(item.amount)}</td>
+                                      </tr>
+                                  ))}
+                              </tbody>
+                          </table>
+                      )}
+                  </div>
+                  <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-xl text-right">
+                      <span className="text-xs font-bold text-slate-500 uppercase mr-4">Total Spent:</span>
+                      <span className="font-mono font-bold text-indigo-600 text-lg">
+                          {formatCurrency(lineDetails.reduce((sum, i) => sum + i.amount, 0))}
+                      </span>
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 };

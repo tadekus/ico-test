@@ -22,6 +22,9 @@ function App() {
 
   // TABS
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  
+  // DEEP LINKING STATE
+  const [targetInvoiceId, setTargetInvoiceId] = useState<number | null>(null);
 
   const configStatus = { gemini: !!process.env.API_KEY, supabase: isSupabaseConfigured };
 
@@ -190,6 +193,12 @@ function App() {
         setActiveTab('dashboard');
       }
   };
+  
+  // Navigation Handler from Cost Report
+  const handleNavigateToInvoice = (invoiceId: number) => {
+      setTargetInvoiceId(invoiceId);
+      setActiveTab('invoicing');
+  };
 
   // DYNAMIC HEADER LABEL
   let headerRole = 'User';
@@ -301,11 +310,17 @@ function App() {
 
             <div className="transition-all duration-300">
                 {activeTab === 'invoicing' && canInvoice && (
-                    <InvoicingModule currentProject={currentProject} />
+                    <InvoicingModule 
+                        currentProject={currentProject} 
+                        initialInvoiceId={targetInvoiceId}
+                    />
                 )}
                 
                 {activeTab === 'costreport' && canInvoice && currentProject && (
-                    <CostReportModule currentProject={currentProject} />
+                    <CostReportModule 
+                        currentProject={currentProject} 
+                        onNavigateToInvoice={handleNavigateToInvoice}
+                    />
                 )}
 
                 {activeTab === 'admin' && userProfile && (

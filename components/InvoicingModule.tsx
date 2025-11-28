@@ -8,9 +8,10 @@ import { fetchInvoices, saveExtractionResult, uploadBudget, setBudgetActive, fet
 
 interface InvoicingModuleProps {
   currentProject: Project | null;
+  initialInvoiceId?: number | null;
 }
 
-const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => {
+const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initialInvoiceId }) => {
   const [stagedFiles, setStagedFiles] = useState<FileData[]>([]);
   const [savedInvoices, setSavedInvoices] = useState<SavedInvoice[]>([]);
   const [viewingInvoiceId, setViewingInvoiceId] = useState<number | null>(null);
@@ -52,6 +53,13 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject }) => 
         }
     }
   }, [currentProject?.id]); // Only depend on ID change
+
+  // EFFECT 1.5: Handle Deep Linking (from Cost Report)
+  useEffect(() => {
+      if (initialInvoiceId && initialInvoiceId !== viewingInvoiceId) {
+          setViewingInvoiceId(initialInvoiceId);
+      }
+  }, [initialInvoiceId]);
 
   // EFFECT 2: Handle Budget Updates (Sync budget list without resetting view)
   useEffect(() => {

@@ -301,6 +301,30 @@ export const fetchInvoiceAllocations = async (invoiceId: number): Promise<Invoic
     return data as InvoiceAllocation[];
 };
 
+export const fetchAllocationsForBudgetLine = async (budgetLineId: number): Promise<any[]> => {
+    if (!supabase) return [];
+    // Join through allocations to invoice to get invoice details
+    const { data, error } = await supabase
+        .from('invoice_allocations')
+        .select(`
+            id, 
+            amount, 
+            invoice:invoices(id, internal_id, company_name, description, amount_with_vat, amount_without_vat, currency)
+        `)
+        .eq('budget_line_id', budgetLineId);
+        
+    if (error) {
+        console.error("Error fetching line allocations", error);
+        return [];
+    }
+    
+    return data.map((item: any) => ({
+        id: item.id,
+        amount: item.amount,
+        ...item.invoice
+    }));
+};
+
 export const saveInvoiceAllocation = async (invoiceId: number, budgetLineId: number, amount: number) => {
     if (!supabase) throw new Error("Supabase not configured");
     const { error } = await supabase.from('invoice_allocations').insert([{
