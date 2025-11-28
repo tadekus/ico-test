@@ -67,7 +67,19 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 
   if (!editedResult) return <div>Loading data...</div>;
 
+  const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
+  const invoiceTotal = editedResult?.amountWithoutVat || 0;
+  const unallocated = invoiceTotal - totalAllocated;
+  const isBalanced = Math.abs(unallocated) <= 1; // Allow small tolerance
+
   const handleSave = async (targetStatus: SavedInvoice['status'] = 'approved') => {
+    // STRICT VALIDATION: Block approval if unallocated amount exists
+    if (targetStatus === 'approved' && !isBalanced) {
+        setSaveStatus('error');
+        setErrorMessage("Cannot approve: Total Allocated must match Invoice Base Amount exactly.");
+        return;
+    }
+
     setSaveStatus('saving');
     try {
       if (!project) throw new Error("No project context.");
@@ -184,9 +196,6 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
       ).slice(0, 20)
     : [];
 
-  const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
-  const invoiceTotal = editedResult?.amountWithoutVat || 0;
-  const unallocated = invoiceTotal - totalAllocated;
   const availableSuggestions = suggestedLines.filter(line => !allocations.some(a => a.budget_line_id === line.id));
 
   return (
@@ -296,7 +305,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 <div className="pt-2 border-t border-slate-200 text-xs space-y-1">
                     <div className="flex justify-between items-center"><span className="text-[9px] text-slate-400 uppercase font-bold">Total Allocated</span><div className="font-mono font-bold text-slate-800 text-sm">{formatCurrency(totalAllocated)}</div></div>
                     <div className="flex justify-between items-center"><span className="text-[9px] text-slate-400 uppercase">Invoice Total (Base)</span><div className="font-mono text-slate-500">{formatCurrency(invoiceTotal)}</div></div>
-                    <div className="flex justify-between items-center pt-1 mt-1 border-t border-slate-100"><span className="text-[9px] text-slate-400 uppercase font-bold">Unallocated</span><span className={`font-mono font-bold text-sm ${Math.abs(unallocated) > 1 ? (unallocated < 0 ? 'text-red-500' : 'text-emerald-600') : 'text-slate-300'}`}>{formatCurrency(unallocated)}</span></div>
+                    <div className="flex justify-between items-center pt-1 mt-1 border-t border-slate-100"><span className="text-[9px] text-slate-400 uppercase font-bold">Unallocated</span><span className={`font-mono font-bold text-sm ${!isBalanced ? 'text-red-500' : 'text-emerald-600'}`}>{formatCurrency(unallocated)}</span></div>
                 </div>
             </div>
 
@@ -328,7 +337,12 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                     <button onClick={() => handleProducerAction('approve')} className="bg-emerald-600 text-white hover:bg-emerald-700 py-2 rounded-lg font-medium text-sm shadow-sm">Final Approve</button>
                 </div>
             ) : !isLocked ? (
-                <button onClick={() => handleSave('approved')} disabled={saveStatus === 'saving' || saveStatus === 'success'} className={`w-full py-2 rounded-lg text-white font-medium shadow-sm transition-all text-sm ${saveStatus === 'success' ? 'bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-700'} disabled:opacity-75`}>
+                <button 
+                    onClick={() => handleSave('approved')} 
+                    disabled={saveStatus === 'saving' || saveStatus === 'success' || (!isBalanced && !isProducer)} 
+                    className={`w-full py-2 rounded-lg text-white font-medium shadow-sm transition-all text-sm ${saveStatus === 'success' ? 'bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-700'} disabled:opacity-50 disabled:bg-slate-400`}
+                    title={!isBalanced && !isProducer ? "Total Allocated must match Invoice Base Amount exactly." : ""}
+                >
                     {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved' : (isRejected ? 'Re-Submit for Approval' : (invoice.status === 'approved' ? 'Re-approve Invoice' : 'Approve Invoice'))}
                 </button>
             ) : (
