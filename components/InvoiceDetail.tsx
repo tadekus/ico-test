@@ -242,28 +242,31 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
         <div className="p-4 overflow-y-auto flex-1 space-y-4">
             
             {/* ALLOCATION */}
-            <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 shadow-sm">
+            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 shadow-sm">
                 <div className="flex justify-between items-center mb-3">
-                    <label className="text-[10px] font-bold text-indigo-600 uppercase tracking-wide">Budget Allocation</label>
-                    <span className="text-[9px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+                    <label className="text-xs font-bold text-indigo-600 uppercase tracking-wide">Budget Allocation</label>
+                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
                         {allocations.length} items
                     </span>
                 </div>
 
                 {/* SUGGESTIONS: Hide if Locked OR Producer */}
                 {!isLocked && !isProducer && availableSuggestions.length > 0 && (
-                    <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
-                        <h4 className="text-[10px] font-bold text-amber-700 uppercase mb-2">Suggested for this Supplier</h4>
-                        <div className="space-y-2">
+                    <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
+                        <h4 className="text-xs font-bold text-amber-800 uppercase mb-3 flex items-center gap-2">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                            Suggested for this Supplier
+                        </h4>
+                        <div className="space-y-3">
                             {availableSuggestions.map(line => (
-                                <div key={line.id} className="flex justify-between items-center bg-white p-2 rounded border border-amber-100">
-                                    <div className="min-w-0 flex-1 mr-2">
+                                <div key={line.id} className="flex justify-between items-center bg-white p-3 rounded border border-amber-100 shadow-sm">
+                                    <div className="min-w-0 flex-1 mr-3">
                                         <div className="font-bold text-slate-800 text-sm truncate">
-                                            <span className="font-mono text-indigo-600 mr-2">{line.account_number}</span>
+                                            <span className="font-mono text-indigo-600 mr-2 text-xs bg-indigo-50 px-1.5 py-0.5 rounded">{line.account_number}</span>
                                             {line.account_description}
                                         </div>
                                     </div>
-                                    <button onClick={() => handleSelectBudgetLine(line)} className="text-[10px] font-bold text-white bg-amber-500 hover:bg-amber-600 px-3 py-1.5 rounded">USE</button>
+                                    <button onClick={() => handleSelectBudgetLine(line)} className="text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 px-4 py-2 rounded shadow-sm transition-colors">USE</button>
                                 </div>
                             ))}
                         </div>
@@ -272,53 +275,53 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 
                 {/* SEARCH & ADD: Hide if Locked OR Producer */}
                 {!isLocked && !isProducer && (
-                    <div className="flex gap-2 mb-3 relative">
+                    <div className="flex gap-2 mb-4 relative">
                         <div className="flex-1 relative">
                             <input 
                                 type="text" placeholder="Search budget line..."
                                 value={allocationSearch}
                                 onChange={e => { setAllocationSearch(e.target.value); setSelectedBudgetLine(null); }}
-                                className="w-full text-xs px-2 py-1.5 border rounded outline-none focus:ring-1 focus:ring-indigo-500"
+                                className="w-full text-sm px-3 py-2 border rounded outline-none focus:ring-2 focus:ring-indigo-500"
                             />
                             {filteredBudgetLines.length > 0 && (
-                                <div className="absolute top-full left-0 w-full bg-white border shadow-xl rounded-lg mt-1 max-h-48 overflow-auto z-50 text-xs divide-y divide-slate-50">
+                                <div className="absolute top-full left-0 w-full bg-white border shadow-xl rounded-lg mt-1 max-h-60 overflow-auto z-50 text-sm divide-y divide-slate-50">
                                     {filteredBudgetLines.map(line => (
-                                        <div key={line.id} className="p-2 hover:bg-indigo-50 cursor-pointer flex justify-between items-center group" onClick={() => handleSelectBudgetLine(line)}>
+                                        <div key={line.id} className="p-3 hover:bg-indigo-50 cursor-pointer flex justify-between items-center group transition-colors" onClick={() => handleSelectBudgetLine(line)}>
                                             <div className="overflow-hidden pr-2">
-                                                <div className="font-bold text-indigo-700 truncate"><span className="font-mono mr-2 opacity-80">{line.account_number}</span>{line.account_description}</div>
-                                                <div className="text-[9px] text-slate-400 truncate">{line.category_description}</div>
+                                                <div className="font-bold text-indigo-700 truncate"><span className="font-mono mr-2 opacity-80 bg-indigo-50 px-1 rounded">{line.account_number}</span>{line.account_description}</div>
+                                                <div className="text-xs text-slate-400 truncate mt-0.5">{line.category_description}</div>
                                             </div>
-                                            <div className="font-mono text-slate-500 whitespace-nowrap text-[10px] bg-slate-50 px-1.5 py-0.5 rounded">{formatCurrency(line.original_amount)}</div>
+                                            <div className="font-mono text-slate-500 whitespace-nowrap text-xs bg-slate-50 px-2 py-1 rounded border border-slate-100">{formatCurrency(line.original_amount)}</div>
                                         </div>
                                     ))}
                                 </div>
                             )}
                         </div>
-                        <input type="number" value={allocationAmount} onChange={e => setAllocationAmount(parseFloat(e.target.value))} className="w-24 text-xs px-2 py-1.5 border rounded text-right outline-none font-mono" />
-                        <button onClick={handleConfirmAllocation} disabled={!selectedBudgetLine || isAllocating} className="bg-indigo-600 text-white px-3 py-1.5 rounded text-xs font-medium disabled:opacity-50">Add</button>
+                        <input type="number" value={allocationAmount} onChange={e => setAllocationAmount(parseFloat(e.target.value))} className="w-28 text-sm px-3 py-2 border rounded text-right outline-none font-mono focus:ring-2 focus:ring-indigo-500" />
+                        <button onClick={handleConfirmAllocation} disabled={!selectedBudgetLine || isAllocating} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded text-sm font-bold shadow-sm disabled:opacity-50 transition-colors">Add</button>
                     </div>
                 )}
 
-                <div className="space-y-1.5 max-h-36 overflow-y-auto mb-2 pr-1">
+                <div className="space-y-2 max-h-48 overflow-y-auto mb-3 pr-1">
                     {allocations.map(alloc => (
-                        <div key={alloc.id} className="flex justify-between items-center text-xs bg-white border border-slate-200 p-2 rounded shadow-sm">
+                        <div key={alloc.id} className="flex justify-between items-center text-sm bg-white border border-slate-200 p-2.5 rounded shadow-sm hover:border-indigo-300 transition-colors">
                             <div className="flex-1 min-w-0">
-                                <span className="font-mono font-bold text-indigo-600 mr-2 text-[11px]">{alloc.budget_line?.account_number}</span>
+                                <span className="font-mono font-bold text-indigo-600 mr-2 text-xs bg-indigo-50 px-1.5 py-0.5 rounded">{alloc.budget_line?.account_number}</span>
                                 <span className="truncate text-slate-700 font-medium">{alloc.budget_line?.account_description}</span>
                             </div>
-                            <div className="flex items-center gap-3 ml-2">
-                                <span className={`font-mono font-medium ${alloc.amount === 0 ? 'text-red-500' : 'text-slate-800'}`}>{formatCurrency(alloc.amount)}</span>
+                            <div className="flex items-center gap-4 ml-3">
+                                <span className={`font-mono font-bold ${alloc.amount === 0 ? 'text-red-500' : 'text-slate-800'}`}>{formatCurrency(alloc.amount)}</span>
                                 {/* REMOVE: Hide if Locked OR Producer */}
-                                {!isLocked && !isProducer && <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-[10px] font-bold px-1">✕</button>}
+                                {!isLocked && !isProducer && <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-xs font-bold px-2 py-1 hover:bg-red-50 rounded transition-colors">✕</button>}
                             </div>
                         </div>
                     ))}
                 </div>
                 
-                <div className="pt-2 border-t border-slate-200 text-xs space-y-1">
-                    <div className="flex justify-between items-center"><span className="text-[9px] text-slate-400 uppercase font-bold">Total Allocated</span><div className="font-mono font-bold text-slate-800 text-sm">{formatCurrency(totalAllocated)}</div></div>
-                    <div className="flex justify-between items-center"><span className="text-[9px] text-slate-400 uppercase">Invoice Total (Base)</span><div className="font-mono text-slate-500">{formatCurrency(invoiceTotal)}</div></div>
-                    <div className="flex justify-between items-center pt-1 mt-1 border-t border-slate-100"><span className="text-[9px] text-slate-400 uppercase font-bold">Unallocated</span><span className={`font-mono font-bold text-sm ${!isBalanced ? 'text-red-500' : 'text-emerald-600'}`}>{formatCurrency(unallocated)}</span></div>
+                <div className="pt-3 border-t border-slate-200 text-sm space-y-2 bg-slate-50/50 -mx-4 -mb-4 p-4 rounded-b-lg">
+                    <div className="flex justify-between items-center"><span className="text-xs text-slate-500 uppercase font-bold tracking-wide">Total Allocated</span><div className="font-mono font-bold text-slate-800 text-base">{formatCurrency(totalAllocated)}</div></div>
+                    <div className="flex justify-between items-center"><span className="text-xs text-slate-500 uppercase tracking-wide">Invoice Total (Base)</span><div className="font-mono text-slate-500">{formatCurrency(invoiceTotal)}</div></div>
+                    <div className="flex justify-between items-center pt-2 mt-2 border-t border-slate-200"><span className="text-xs text-slate-600 uppercase font-bold tracking-wide">Unallocated</span><span className={`font-mono font-bold text-base ${!isBalanced ? 'text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-100' : 'text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100'}`}>{formatCurrency(unallocated)}</span></div>
                 </div>
             </div>
 
