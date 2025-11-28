@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
 import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory } from '../services/supabaseService';
@@ -67,17 +66,31 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 
   if (!editedResult) return <div>Loading data...</div>;
 
+  // Render-time calculation for UI feedback
   const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
   const invoiceTotal = editedResult?.amountWithoutVat || 0;
   const unallocated = invoiceTotal - totalAllocated;
-  const isBalanced = Math.abs(unallocated) <= 1; // Allow small tolerance
+  const isBalanced = Math.abs(unallocated) <= 1; // Allow small tolerance for UI
 
   const handleSave = async (targetStatus: SavedInvoice['status'] = 'approved') => {
+    setSaveStatus('idle'); // Reset status
+    setErrorMessage(null);
+    
+    // RECALCULATE STRICTLY INSIDE HANDLER
+    // This prevents using stale closure variables
+    const currentTotalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
+    const currentInvoiceTotal = editedResult?.amountWithoutVat || 0;
+    const currentUnallocated = currentInvoiceTotal - currentTotalAllocated;
+    
     // STRICT VALIDATION: Block approval if unallocated amount exists
-    if (targetStatus === 'approved' && !isBalanced) {
-        setSaveStatus('error');
-        setErrorMessage("Cannot approve: Total Allocated must match Invoice Base Amount exactly.");
-        return;
+    // Only applies when Line Producer submits for approval (status 'approved')
+    if (targetStatus === 'approved' && !isProducer) {
+        // We allow a tiny tolerance (1.0) for rounding issues
+        if (Math.abs(currentUnallocated) > 1.0) {
+            setSaveStatus('error');
+            setErrorMessage(`Cannot approve: Unallocated amount is ${currentUnallocated.toFixed(2)}. It must be 0.`);
+            return;
+        }
     }
 
     setSaveStatus('saving');
@@ -329,7 +342,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
         </div>
 
         <div className="p-3 border-t border-slate-100 bg-slate-50 rounded-b-xl shrink-0">
-            {errorMessage && <div className="text-red-500 text-xs mb-2 text-center">{errorMessage}</div>}
+            {errorMessage && <div className="text-red-500 text-xs mb-2 text-center font-bold bg-red-50 p-2 rounded border border-red-200">{errorMessage}</div>}
             
             {isProducer && isReadyForReview ? (
                 <div className="grid grid-cols-2 gap-2">
@@ -339,9 +352,10 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             ) : !isLocked ? (
                 <button 
                     onClick={() => handleSave('approved')} 
-                    disabled={saveStatus === 'saving' || saveStatus === 'success' || (!isBalanced && !isProducer)} 
+                    // Note: We intentionally DO NOT disable the button for validation errors
+                    // so the user can click it and see the error message.
+                    disabled={saveStatus === 'saving' || saveStatus === 'success'} 
                     className={`w-full py-2 rounded-lg text-white font-medium shadow-sm transition-all text-sm ${saveStatus === 'success' ? 'bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-700'} disabled:opacity-50 disabled:bg-slate-400`}
-                    title={!isBalanced && !isProducer ? "Total Allocated must match Invoice Base Amount exactly." : ""}
                 >
                     {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved' : (isRejected ? 'Re-Submit for Approval' : (invoice.status === 'approved' ? 'Re-approve Invoice' : 'Approve Invoice'))}
                 </button>
