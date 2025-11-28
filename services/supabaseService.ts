@@ -292,9 +292,12 @@ export const updateInvoice = async (
 export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]> => {
   if (!supabase) throw new Error("Supabase is not configured.");
 
+  // OPTIMIZATION: EXCLUDE file_content
+  // The file_content column contains huge base64 strings (PDFs/Images).
+  // Fetching it in a list query kills performance. We fetch it on demand in fetchInvoiceFileContent.
   let query = supabase
     .from('invoices')
-    .select('id, created_at, internal_id, ico, company_name, description, amount_with_vat, amount_without_vat, currency, status, project_id, file_content, variable_symbol, bank_account, iban, confidence, rejection_reason')
+    .select('id, created_at, internal_id, ico, company_name, description, amount_with_vat, amount_without_vat, currency, status, project_id, variable_symbol, bank_account, iban, confidence, rejection_reason')
     .order('internal_id', { ascending: false });
 
   if (projectId) {
@@ -307,6 +310,18 @@ export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]>
 
   if (error) throw error;
   return data as SavedInvoice[];
+};
+
+export const fetchInvoiceFileContent = async (invoiceId: number): Promise<string | null> => {
+    if (!supabase) return null;
+    const { data, error } = await supabase
+        .from('invoices')
+        .select('file_content')
+        .eq('id', invoiceId)
+        .single();
+    
+    if (error) return null;
+    return data?.file_content;
 };
 
 export const deleteInvoice = async (id: number): Promise<void> => {

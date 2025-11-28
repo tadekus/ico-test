@@ -1,6 +1,7 @@
+
 import React, { useState, useEffect } from 'react';
 import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
-import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory } from '../services/supabaseService';
+import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory, fetchInvoiceFileContent } from '../services/supabaseService';
 
 interface InvoiceDetailProps {
   invoice: SavedInvoice;
@@ -16,6 +17,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const [editedResult, setEditedResult] = useState<ExtractionResult | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [loadedFileContent, setLoadedFileContent] = useState<string | undefined>(fileData.base64);
 
   // Budget Allocation State
   const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
@@ -36,6 +38,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const isRejected = invoice.status === 'rejected';
 
   useEffect(() => {
+    // Reset State
     setSaveStatus('idle');
     setErrorMessage(null);
     setAllocations([]);
@@ -43,6 +46,15 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setAllocationSearch('');
     setAllocationAmount(0);
     setSuggestedLines([]);
+    
+    // Load file content if missing (Performance optimization)
+    if (!fileData.base64 && invoice.id) {
+        fetchInvoiceFileContent(invoice.id).then(content => {
+            if (content) setLoadedFileContent(content);
+        });
+    } else {
+        setLoadedFileContent(fileData.base64);
+    }
     
     if (project) {
         fetchActiveBudgetLines(project.id).then(setBudgetLines).catch(console.error);
@@ -56,7 +68,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             }
         }).catch(console.error);
     }
-  }, [invoice.id, project?.id, invoice.ico]); 
+  }, [invoice.id, project?.id, invoice.ico, fileData.base64]); 
 
   useEffect(() => {
     if (fileData.extractionResult) {
@@ -376,7 +388,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
         </div>
         <div className="flex-1 bg-slate-200 overflow-auto relative flex items-center justify-center p-4">
            {fileData.type === 'image' && fileData.preview && <img src={fileData.preview} alt="Preview" className="max-w-full max-h-full object-contain shadow-lg" />}
-           {fileData.type === 'pdf' && <iframe src={(fileData.preview || (fileData.base64 ? `data:application/pdf;base64,${fileData.base64}` : '')) + '#toolbar=0&navpanes=0&scrollbar=0&zoom=80'} className="w-full h-full shadow-lg bg-white" title="PDF Preview" />}
+           {fileData.type === 'pdf' && <iframe src={(fileData.preview || (loadedFileContent ? `data:application/pdf;base64,${loadedFileContent}` : '')) + '#toolbar=0&navpanes=0&scrollbar=0&zoom=80'} className="w-full h-full shadow-lg bg-white" title="PDF Preview" />}
            {fileData.type === 'excel' && <div className="p-8 text-center text-slate-500 bg-white shadow rounded-lg"><pre className="mt-4 text-xs text-left bg-slate-50 p-4 rounded border overflow-auto max-h-96">{fileData.textContent}</pre></div>}
         </div>
       </div>

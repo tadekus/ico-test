@@ -337,39 +337,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === REPAIR V31: SUPERUSER PASSWORD RESET ===
+-- === OPTIMIZATION V32: PERFORMANCE BOOST ===
 
--- 1. Create Function for Superusers to reset passwords of their own invitees
-CREATE OR REPLACE FUNCTION superuser_reset_password(target_user_id uuid, new_password text)
-RETURNS void AS $$
-DECLARE
-  is_inviter boolean;
-  enc_pw text;
-BEGIN
-  -- Verify if current user (superuser) invited the target user
-  SELECT EXISTS(
-    SELECT 1 FROM profiles 
-    WHERE id = target_user_id AND invited_by = auth.uid()
-  ) INTO is_inviter;
+-- 1. Create Composite Index to speed up invoice listing
+-- This makes filtering by project_id AND sorting by internal_id practically instant
+DROP INDEX IF EXISTS idx_invoices_project_internal;
+CREATE INDEX idx_invoices_project_internal ON invoices (project_id, internal_id DESC);
 
-  IF NOT is_inviter THEN
-    RAISE EXCEPTION 'Permission denied: You can only change passwords for users you invited.';
-  END IF;
+-- 2. Ensure RLS doesn't choke on foreign keys
+DROP INDEX IF EXISTS idx_project_assignments_user_project;
+CREATE INDEX idx_project_assignments_user_project ON project_assignments (user_id, project_id);
 
-  -- Ensure pgcrypto extension is available in extensions schema
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto') THEN
-    CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
-  END IF;
-
-  -- Encrypt password
-  enc_pw := extensions.crypt(new_password, extensions.gen_salt('bf'));
-
-  -- Update auth.users
-  UPDATE auth.users
-  SET encrypted_password = enc_pw
-  WHERE id = target_user_id;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+-- 3. Optimize ICO search index
+DROP INDEX IF EXISTS idx_invoices_ico_project;
+CREATE INDEX idx_invoices_ico_project ON invoices (project_id, ico);
 `;
 
   const pendingSystemInvites = invitations.filter(inv => inv.target_app_role === 'admin' || inv.target_app_role === 'superuser');
