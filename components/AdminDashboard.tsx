@@ -337,14 +337,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === OPTIMIZATION V32: PERFORMANCE BOOST ===
+-- === V33 OPTIMIZATION: INDEXES FOR PERFORMANCE ===
 
--- 1. Create Composite Index to speed up invoice listing
+-- 1. Create Composite Index to speed up invoice listing (The Critical Fix)
 -- This makes filtering by project_id AND sorting by internal_id practically instant
 DROP INDEX IF EXISTS idx_invoices_project_internal;
 CREATE INDEX idx_invoices_project_internal ON invoices (project_id, internal_id DESC);
 
--- 2. Ensure RLS doesn't choke on foreign keys
+-- 2. Foreign Key Indexes (Postgres doesn't create these automatically)
+-- Speeds up fetching allocations and budget lines
+DROP INDEX IF EXISTS idx_budget_lines_budget_id;
+CREATE INDEX idx_budget_lines_budget_id ON budget_lines (budget_id);
+
+DROP INDEX IF EXISTS idx_invoice_allocations_invoice_id;
+CREATE INDEX idx_invoice_allocations_invoice_id ON invoice_allocations (invoice_id);
+
+DROP INDEX IF EXISTS idx_invoice_allocations_budget_line_id;
+CREATE INDEX idx_invoice_allocations_budget_line_id ON invoice_allocations (budget_line_id);
+
 DROP INDEX IF EXISTS idx_project_assignments_user_project;
 CREATE INDEX idx_project_assignments_user_project ON project_assignments (user_id, project_id);
 

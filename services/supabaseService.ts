@@ -1,4 +1,3 @@
-
 import { createClient } from '@supabase/supabase-js';
 import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole, BudgetLine, InvoiceAllocation } from '../types';
 import { parseBudgetXml } from '../utils/budgetParser';
@@ -293,8 +292,7 @@ export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]>
   if (!supabase) throw new Error("Supabase is not configured.");
 
   // OPTIMIZATION: EXCLUDE file_content
-  // The file_content column contains huge base64 strings (PDFs/Images).
-  // Fetching it in a list query kills performance. We fetch it on demand in fetchInvoiceFileContent.
+  // This drastically reduces payload size (from ~50MB to ~50KB for a list)
   let query = supabase
     .from('invoices')
     .select('id, created_at, internal_id, ico, company_name, description, amount_with_vat, amount_without_vat, currency, status, project_id, variable_symbol, bank_account, iban, confidence, rejection_reason')
