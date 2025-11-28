@@ -42,7 +42,21 @@ export const signIn = async (email: string, password: string) => {
 
 export const signOut = async () => {
   if (!supabase) throw new Error("Supabase not configured");
-  return await supabase.auth.signOut();
+  
+  // 1. Perform Supabase Sign Out
+  const { error } = await supabase.auth.signOut();
+  if (error) console.error("SignOut Error:", error);
+
+  // 2. FORCE CLEANUP: Manually remove Supabase tokens from LocalStorage
+  // This prevents "Zombie Sessions" where switching tabs re-hydrates the session
+  // because the token wasn't fully purged from browser storage.
+  Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('sb-') || key.includes('supabase')) {
+          localStorage.removeItem(key);
+      }
+  });
+  
+  return;
 };
 
 export const completeAccountSetup = async (password: string, fullName: string) => {
@@ -269,7 +283,7 @@ export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]>
 
   let query = supabase
     .from('invoices')
-    .select('id, created_at, internal_id, ico, company_name, description, amount_with_vat, amount_without_vat, currency, status, project_id, file_content, variable_symbol, bank_account, iban, confidence')
+    .select('id, created_at, internal_id, ico, company_name, description, amount_with_vat, amount_without_vat, currency, status, project_id, file_content, variable_symbol, bank_account, iban, confidence, rejection_reason')
     .order('internal_id', { ascending: false });
 
   if (projectId) {
