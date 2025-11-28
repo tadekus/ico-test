@@ -62,7 +62,12 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
               amountWithoutVat: activeInvoice.amount_without_vat,
               currency: activeInvoice.currency,
               confidence: activeInvoice.confidence,
-              // Map other fields as needed
+              // Map full details for Producer View
+              variableSymbol: activeInvoice.variable_symbol,
+              description: activeInvoice.description,
+              bankAccount: activeInvoice.bank_account,
+              iban: activeInvoice.iban,
+              rawText: activeInvoice.raw_text || undefined
           }
       };
 
