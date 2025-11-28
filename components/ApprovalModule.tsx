@@ -13,6 +13,7 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
   const [loading, setLoading] = useState(true);
   const [viewingInvoiceId, setViewingInvoiceId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'pending' | 'approved' | 'rejected'>('pending');
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'internal_id', direction: 'asc' });
 
   useEffect(() => {
     loadData();
@@ -43,10 +44,31 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
   const approvedInvoices = invoices.filter(i => i.status === 'final_approved');
   const rejectedInvoices = invoices.filter(i => i.status === 'rejected');
 
-  const getActiveList = () => {
+  const getFilteredList = () => {
       if (activeTab === 'pending') return pendingInvoices;
       if (activeTab === 'approved') return approvedInvoices;
       return rejectedInvoices;
+  };
+
+  const getActiveList = () => {
+      const filtered = getFilteredList();
+      return [...filtered].sort((a, b) => {
+          const aVal = a[sortConfig.key as keyof SavedInvoice];
+          const bVal = b[sortConfig.key as keyof SavedInvoice];
+
+          if (aVal === null || aVal === undefined) return 1;
+          if (bVal === null || bVal === undefined) return -1;
+
+          if (typeof aVal === 'string' && typeof bVal === 'string') {
+              return sortConfig.direction === 'asc' 
+                  ? aVal.localeCompare(bVal) 
+                  : bVal.localeCompare(aVal);
+          }
+          if (typeof aVal === 'number' && typeof bVal === 'number') {
+              return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+          }
+          return 0;
+      });
   };
 
   const activeInvoice = invoices.find(i => i.id === viewingInvoiceId);
@@ -54,9 +76,10 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
   // Calculate next invoice ID for auto-advance in Pending tab
   let nextReviewId: number | null = null;
   if (activeTab === 'pending' && viewingInvoiceId) {
-      const currentIndex = pendingInvoices.findIndex(i => i.id === viewingInvoiceId);
-      if (currentIndex !== -1 && currentIndex < pendingInvoices.length - 1) {
-          nextReviewId = pendingInvoices[currentIndex + 1].id;
+      const activeList = getActiveList(); // Use sorted list for consistent order
+      const currentIndex = activeList.findIndex(i => i.id === viewingInvoiceId);
+      if (currentIndex !== -1 && currentIndex < activeList.length - 1) {
+          nextReviewId = activeList[currentIndex + 1].id;
       }
   }
 
@@ -102,6 +125,13 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
       return new Intl.NumberFormat('cs-CZ').format(amount).replace(/\s/g, ' ') + ' ' + (currency || 'CZK');
   };
 
+  const handleSortChange = (key: string) => {
+      setSortConfig(prev => ({
+          key,
+          direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+      }));
+  };
+
   return (
     <div className="bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[calc(100vh-120px)]">
         <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
@@ -129,6 +159,20 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
                     Rejected ({rejectedInvoices.length})
                 </button>
             </div>
+        </div>
+        
+        {/* Sort Controls */}
+        <div className="px-4 py-2 border-b border-slate-100 flex items-center gap-3 text-xs">
+            <span className="text-slate-400 font-bold uppercase">Sort By:</span>
+            <button onClick={() => handleSortChange('internal_id')} className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 ${sortConfig.key === 'internal_id' ? 'text-indigo-600 font-bold' : 'text-slate-600'}`}>
+                ID {sortConfig.key === 'internal_id' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
+            </button>
+            <button onClick={() => handleSortChange('company_name')} className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 ${sortConfig.key === 'company_name' ? 'text-indigo-600 font-bold' : 'text-slate-600'}`}>
+                Supplier {sortConfig.key === 'company_name' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
+            </button>
+            <button onClick={() => handleSortChange('amount_without_vat')} className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-100 ${sortConfig.key === 'amount_without_vat' ? 'text-indigo-600 font-bold' : 'text-slate-600'}`}>
+                Amount {sortConfig.key === 'amount_without_vat' && (sortConfig.direction === 'asc' ? '▲' : '▼')}
+            </button>
         </div>
 
         <div className="flex-1 overflow-auto p-4">

@@ -20,6 +20,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
   
   // List View State
   const [activeListTab, setActiveListTab] = useState<'processing' | 'final_approved'>('processing');
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'internal_id', direction: 'desc' });
   
   // Budget Management State
   const [budgetList, setBudgetList] = useState<Budget[]>([]);
@@ -210,6 +211,15 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
       }
   };
 
+  // SORTING HANDLER
+  const handleSort = (key: string) => {
+      let direction: 'asc' | 'desc' = 'asc';
+      if (sortConfig.key === key && sortConfig.direction === 'asc') {
+          direction = 'desc';
+      }
+      setSortConfig({ key, direction });
+  };
+
   const activeInvoice = savedInvoices.find(inv => inv.id === viewingInvoiceId);
   
   // Find the NEXT draft invoice for the "Approve & Next" workflow
@@ -217,7 +227,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
   const nextDraftId = draftInvoices.length > 0 ? draftInvoices[0].id : null;
 
   // Filter Invoices based on Tab
-  const displayedInvoices = savedInvoices.filter(inv => {
+  const filteredInvoices = savedInvoices.filter(inv => {
       if (activeListTab === 'processing') {
           // Show Draft, Approved (Pending Producer), and Rejected
           return ['draft', 'approved', 'rejected'].includes(inv.status);
@@ -225,6 +235,25 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
           // Show Final Approved only
           return inv.status === 'final_approved';
       }
+  });
+
+  // Sort Invoices
+  const sortedInvoices = [...filteredInvoices].sort((a, b) => {
+      const aVal = a[sortConfig.key as keyof SavedInvoice];
+      const bVal = b[sortConfig.key as keyof SavedInvoice];
+
+      if (aVal === null || aVal === undefined) return 1;
+      if (bVal === null || bVal === undefined) return -1;
+
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+          return sortConfig.direction === 'asc' 
+              ? aVal.localeCompare(bVal) 
+              : bVal.localeCompare(aVal);
+      }
+      if (typeof aVal === 'number' && typeof bVal === 'number') {
+          return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
+      }
+      return 0;
   });
 
   // Map SavedInvoice to FileData structure for InvoiceDetail
@@ -262,6 +291,11 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
           />
       );
   }
+
+  const renderSortIndicator = (key: string) => {
+      if (sortConfig.key !== key) return <span className="text-slate-300 ml-1">↕</span>;
+      return <span className="text-indigo-600 ml-1">{sortConfig.direction === 'asc' ? '▲' : '▼'}</span>;
+  };
 
   // VIEW: MAIN DASHBOARD
   return (
@@ -342,16 +376,36 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                <table className="w-full text-sm text-left">
                    <thead className="bg-white text-slate-500 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-sm">
                        <tr>
-                           <th className="px-6 py-3 w-16 whitespace-nowrap">#</th>
+                           <th 
+                               className="px-6 py-3 w-20 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
+                               onClick={() => handleSort('internal_id')}
+                           >
+                               <div className="flex items-center"># {renderSortIndicator('internal_id')}</div>
+                           </th>
                            <th className="px-6 py-3 w-24 whitespace-nowrap">Status</th>
-                           <th className="px-6 py-3 whitespace-nowrap">Supplier</th>
-                           <th className="px-6 py-3 whitespace-nowrap">Description</th>
-                           <th className="px-6 py-3 text-right whitespace-nowrap">Base Amount</th>
+                           <th 
+                               className="px-6 py-3 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
+                               onClick={() => handleSort('company_name')}
+                           >
+                               <div className="flex items-center">Supplier {renderSortIndicator('company_name')}</div>
+                           </th>
+                           <th 
+                               className="px-6 py-3 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
+                               onClick={() => handleSort('description')}
+                           >
+                               <div className="flex items-center">Description {renderSortIndicator('description')}</div>
+                           </th>
+                           <th 
+                               className="px-6 py-3 text-right whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
+                               onClick={() => handleSort('amount_without_vat')}
+                           >
+                               <div className="flex items-center justify-end">Base Amount {renderSortIndicator('amount_without_vat')}</div>
+                           </th>
                            <th className="px-6 py-3 text-right w-12"></th>
                        </tr>
                    </thead>
                    <tbody className="divide-y divide-slate-100">
-                       {displayedInvoices.map(inv => (
+                       {sortedInvoices.map(inv => (
                            <tr key={inv.id} 
                                onClick={() => setViewingInvoiceId(inv.id)}
                                className={`hover:bg-slate-50 transition-colors cursor-pointer group ${inv.status === 'rejected' ? 'bg-red-50 border-red-200' : ''}`}
@@ -391,7 +445,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                                </td>
                            </tr>
                        ))}
-                       {displayedInvoices.length === 0 && (
+                       {sortedInvoices.length === 0 && (
                            <tr>
                                <td colSpan={6} className="px-6 py-20 text-center text-slate-400 italic">
                                    No invoices in {activeListTab === 'processing' ? 'processing' : 'archive'}.
