@@ -1,12 +1,19 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase, getCurrentUser, getUserProfile, signOut, fetchProjects, fetchAssignedProjects, getProjectRole, isSupabaseConfigured, checkMyPendingInvitation } from './services/supabaseService';
 import { Profile, Project, ProjectRole, AppRole } from './types';
 import Auth, { SetupAccount } from './components/Auth';
-import InvoicingModule from './components/InvoicingModule';
-import CostReportModule from './components/CostReportModule';
-import AdminDashboard from './components/AdminDashboard';
-import ApprovalModule from './components/ApprovalModule';
+// import InvoicingModule from './components/InvoicingModule'; // Removed direct import
+// import CostReportModule from './components/CostReportModule'; // Removed direct import
+// import AdminDashboard from './components/AdminDashboard'; // Removed direct import
+// import ApprovalModule from './components/ApprovalModule'; // Removed direct import
+
+// Lazily load components for code splitting
+const InvoicingModule = React.lazy(() => import('./components/InvoicingModule'));
+const CostReportModule = React.lazy(() => import('./components/CostReportModule'));
+const AdminDashboard = React.lazy(() => import('./components/AdminDashboard'));
+const ApprovalModule = React.lazy(() => import('./components/ApprovalModule'));
+
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -247,6 +254,12 @@ const App: React.FC = () => {
       </div>
     );
   }
+    
+  const LoadingFallback = (
+    <div className="flex justify-center items-center h-full min-h-[300px] bg-white rounded-xl shadow-lg border border-slate-200">
+      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -341,18 +354,20 @@ const App: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
-        {activeModule === 'invoicing' && currentProject && <InvoicingModule key={currentProject.id} currentProject={currentProject} initialInvoiceId={initialInvoiceIdForCostReport} />}
-        {activeModule === 'costReport' && currentProject && <CostReportModule key={currentProject.id} currentProject={currentProject} onNavigateToInvoice={handleNavigateToInvoice} />}
-        {activeModule === 'admin' && profile && <AdminDashboard profile={profile} />}
-        {activeModule === 'approval' && currentProject && <ApprovalModule key={currentProject.id} currentProject={currentProject} />}
+        <Suspense fallback={LoadingFallback}>
+          {activeModule === 'invoicing' && currentProject && <InvoicingModule key={currentProject.id} currentProject={currentProject} initialInvoiceId={initialInvoiceIdForCostReport} />}
+          {activeModule === 'costReport' && currentProject && <CostReportModule key={currentProject.id} currentProject={currentProject} onNavigateToInvoice={handleNavigateToInvoice} />}
+          {activeModule === 'admin' && profile && <AdminDashboard profile={profile} />}
+          {activeModule === 'approval' && currentProject && <ApprovalModule key={currentProject.id} currentProject={currentProject} />}
 
-        {/* Placeholder if no project is selected for invoicing/cost report */}
-        {(activeModule === 'invoicing' || activeModule === 'costReport' || activeModule === 'approval') && !currentProject && profile?.app_role !== 'admin' && (
-            <div className="py-20 text-center text-slate-500">
-                <h2 className="text-xl font-bold mb-2">No Project Selected</h2>
-                <p>Please select a project from the dropdown above to continue, or create a new one in the Admin dashboard.</p>
-            </div>
-        )}
+          {/* Placeholder if no project is selected for invoicing/cost report */}
+          {(activeModule === 'invoicing' || activeModule === 'costReport' || activeModule === 'approval') && !currentProject && profile?.app_role !== 'admin' && (
+              <div className="py-20 text-center text-slate-500">
+                  <h2 className="text-xl font-bold mb-2">No Project Selected</h2>
+                  <p>Please select a project from the dropdown above to continue, or create a new one in the Admin dashboard.</p>
+              </div>
+          )}
+        </Suspense>
       </main>
     </div>
   );
