@@ -337,30 +337,83 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
   };
 
   const getMigrationSql = () => `
--- === V33 OPTIMIZATION: INDEXES FOR PERFORMANCE ===
+-- === V34 OPTIMIZATION: CACHED RLS POLICIES ===
+-- Optimizes RLS by wrapping auth.uid() in a subquery to allow Postgres to cache the result per transaction
+-- instead of re-evaluating it for every single row.
 
--- 1. Create Composite Index to speed up invoice listing (The Critical Fix)
--- This makes filtering by project_id AND sorting by internal_id practically instant
+-- 1. Optimize INVOICES policies
+DROP POLICY IF EXISTS "Users manage own invoices" ON invoices;
+CREATE POLICY "Users manage own invoices" ON invoices FOR ALL TO authenticated
+USING ( (select auth.uid()) = user_id )
+WITH CHECK ( (select auth.uid()) = user_id );
+
+DROP POLICY IF EXISTS "Team Read Invoices" ON invoices;
+CREATE POLICY "Team Read Invoices" ON invoices FOR SELECT TO authenticated
+USING ( 
+  EXISTS (
+    SELECT 1 FROM project_assignments 
+    WHERE user_id = (select auth.uid()) AND project_id = invoices.project_id
+  ) 
+);
+
+DROP POLICY IF EXISTS "Invoices Write" ON invoices;
+DROP POLICY IF EXISTS "Invoices Update" ON invoices;
+CREATE POLICY "Invoices Update" ON invoices FOR UPDATE TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM project_assignments
+    WHERE user_id = (select auth.uid()) AND project_id = invoices.project_id
+  )
+);
+
+DROP POLICY IF EXISTS "Invoices Insert" ON invoices;
+DROP POLICY IF EXISTS "Team Insert Invoices" ON invoices;
+CREATE POLICY "Team Insert Invoices" ON invoices FOR INSERT TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1 FROM project_assignments
+    WHERE user_id = (select auth.uid()) AND project_id = invoices.project_id
+  )
+);
+
+-- 2. Optimize ALLOCATIONS policies
+DROP POLICY IF EXISTS "Team Read Allocations" ON invoice_allocations;
+CREATE POLICY "Team Read Allocations" ON invoice_allocations FOR SELECT TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM invoices
+    JOIN project_assignments ON project_assignments.project_id = invoices.project_id
+    WHERE invoices.id = invoice_allocations.invoice_id
+    AND project_assignments.user_id = (select auth.uid())
+  )
+);
+
+DROP POLICY IF EXISTS "Team Write Allocations" ON invoice_allocations;
+CREATE POLICY "Team Write Allocations" ON invoice_allocations FOR ALL TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM invoices
+    JOIN project_assignments ON project_assignments.project_id = invoices.project_id
+    WHERE invoices.id = invoice_allocations.invoice_id
+    AND project_assignments.user_id = (select auth.uid())
+  )
+);
+
+-- 3. Optimize BUDGET LINES policies
+DROP POLICY IF EXISTS "Team Read Budget Lines" ON budget_lines;
+CREATE POLICY "Team Read Budget Lines" ON budget_lines FOR SELECT TO authenticated
+USING (
+  EXISTS (
+    SELECT 1 FROM budgets
+    JOIN project_assignments ON project_assignments.project_id = budgets.project_id
+    WHERE budgets.id = budget_lines.budget_id
+    AND project_assignments.user_id = (select auth.uid())
+  )
+);
+
+-- 4. Re-Apply Indexes (Just in case they were missed in V33)
 DROP INDEX IF EXISTS idx_invoices_project_internal;
-CREATE INDEX idx_invoices_project_internal ON invoices (project_id, internal_id DESC);
-
--- 2. Foreign Key Indexes (Postgres doesn't create these automatically)
--- Speeds up fetching allocations and budget lines
-DROP INDEX IF EXISTS idx_budget_lines_budget_id;
-CREATE INDEX idx_budget_lines_budget_id ON budget_lines (budget_id);
-
-DROP INDEX IF EXISTS idx_invoice_allocations_invoice_id;
-CREATE INDEX idx_invoice_allocations_invoice_id ON invoice_allocations (invoice_id);
-
-DROP INDEX IF EXISTS idx_invoice_allocations_budget_line_id;
-CREATE INDEX idx_invoice_allocations_budget_line_id ON invoice_allocations (budget_line_id);
-
-DROP INDEX IF EXISTS idx_project_assignments_user_project;
-CREATE INDEX idx_project_assignments_user_project ON project_assignments (user_id, project_id);
-
--- 3. Optimize ICO search index
-DROP INDEX IF EXISTS idx_invoices_ico_project;
-CREATE INDEX idx_invoices_ico_project ON invoices (project_id, ico);
+CREATE INDEX IF NOT EXISTS idx_invoices_project_internal ON invoices (project_id, internal_id DESC);
 `;
 
   const pendingSystemInvites = invitations.filter(inv => inv.target_app_role === 'admin' || inv.target_app_role === 'superuser');
