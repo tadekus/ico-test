@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
@@ -218,7 +219,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
 
           const stampedPdfBytes = await stampInvoicePdf(fileContent, invoiceToStamp, currentProject, allocations);
           
-          const blob = new Blob([stampedPdfBytes as Uint8Array], { type: 'application/pdf' }); // Cast to Uint8Array
+          const blob = new Blob([new Uint8Array(stampedPdfBytes.buffer)], { type: 'application/pdf' }); // FIX: Explicitly create new Uint8Array from buffer
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;

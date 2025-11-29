@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
 import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory, fetchInvoiceFileContent } from '../services/supabaseService';
@@ -196,7 +197,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
           const stampedPdfBytes = await stampInvoicePdf(loadedFileContent, invoice, project, allocations);
           
           // Trigger Download
-          const blob = new Blob([stampedPdfBytes as Uint8Array], { type: 'application/pdf' }); // Cast to Uint8Array
+          const blob = new Blob([new Uint8Array(stampedPdfBytes.buffer)], { type: 'application/pdf' }); // FIX: Explicitly create new Uint8Array from buffer
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
