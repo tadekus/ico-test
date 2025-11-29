@@ -1,4 +1,3 @@
-
 import { createClient } from '@supabase/supabase-js';
 import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole, BudgetLine, InvoiceAllocation } from '../types';
 import { parseBudgetXml } from '../utils/budgetParser';
@@ -191,14 +190,14 @@ export const checkDuplicateInvoice = async (
     // We start with the base query
     let query = supabase
         .from('invoices')
-        .select('id, variable_symbol, amount_with_vat')
+        .select('id, variableSymbol, amount_with_vat')
         .eq('project_id', projectId)
         .eq('ico', cleanIco);
 
     // Filter logic
     if (cleanVs) {
        // Strong Match: IČO + VS (Checking against normalized DB data)
-       query = query.eq('variable_symbol', cleanVs);
+       query = query.eq('variableSymbol', cleanVs);
     } else if (amount) {
        // Fallback Match: IČO + Amount (if VS missing)
        query = query.eq('amount_with_vat', amount);
@@ -249,7 +248,7 @@ export const saveExtractionResult = async (
         company_name: result.companyName,
         bank_account: result.bankAccount,
         iban: result.iban,
-        variable_symbol: normalizedVs, // Save normalized VS
+        variableSymbol: normalizedVs, // Save normalized VS
         description: result.description,
         amount_with_vat: result.amountWithVat,
         amount_without_vat: result.amountWithoutVat,
@@ -313,7 +312,7 @@ export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]>
     .select(`
       id, created_at, internal_id, ico, company_name, description, 
       amount_with_vat, amount_without_vat, currency, status, project_id, 
-      variable_symbol, bank_account, iban, confidence, rejection_reason,
+      variableSymbol, bank_account, iban, confidence, rejection_reason,
       total_allocated_amount, has_allocations, file_content, raw_text, user_id
     `) // Re-added file_content for list view to simplify handling in InvoiceDetail
     .order('internal_id', { ascending: false });
@@ -837,4 +836,3 @@ export const deleteInvitation = async (id: number) => {
   const { error } = await supabase.from('user_invitations').delete().eq('id', id);
   if (error) throw error;
 };
-    

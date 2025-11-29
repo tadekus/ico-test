@@ -1,4 +1,3 @@
-
 export interface ExtractionResult {
   ico: string | null;
   companyName?: string | null;
