@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole, BudgetLine, InvoiceAllocation } from '../types';
 import { parseBudgetXml } from '../utils/budgetParser';
@@ -306,7 +307,10 @@ export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]>
 
   const { data, error } = await query;
 
-  if (error) throw error;
+  if (error) {
+      console.error("RLS/Fetch Invoices Error:", error); // Added error logging
+      throw error;
+  }
   return data as SavedInvoice[];
 };
 
@@ -335,7 +339,10 @@ export const fetchInvoiceAllocations = async (invoiceId: number): Promise<Invoic
         .select(`*, budget_line:budget_lines(*)`)
         .eq('invoice_id', invoiceId);
         
-    if (error) throw error;
+    if (error) {
+        console.error("RLS/Fetch Allocations Error:", error); // Added error logging
+        throw error;
+    }
     return data as InvoiceAllocation[];
 };
 
@@ -352,7 +359,7 @@ export const fetchAllocationsForBudgetLine = async (budgetLineId: number): Promi
         .eq('budget_line_id', budgetLineId);
         
     if (error) {
-        console.error("Error fetching line allocations", error);
+        console.error("RLS/Fetch Line Allocations Error:", error); // Added error logging
         return [];
     }
     
@@ -418,7 +425,7 @@ export const fetchProjects = async (): Promise<Project[]> => {
         .order('created_at', { ascending: false });
 
     if (error) {
-        console.error("Fetch Projects Error:", error);
+        console.error("RLS/Fetch All Projects Error:", error); // Added error logging
         throw new Error("Failed to load projects. " + error.message);
     }
     
@@ -439,7 +446,10 @@ export const fetchAssignedProjects = async (userId: string): Promise<Project[]> 
         .select('project_id')
         .eq('user_id', userId);
 
-    if (assignError) return [];
+    if (assignError) {
+        console.error("RLS/Fetch Project Assignments Error:", assignError); // Added error logging
+        return [];
+    }
     if (!assignments || assignments.length === 0) return [];
 
     const projectIds = assignments.map(a => a.project_id);
@@ -450,7 +460,10 @@ export const fetchAssignedProjects = async (userId: string): Promise<Project[]> 
         .in('id', projectIds)
         .order('created_at', { ascending: false });
         
-    if (projError) return [];
+    if (projError) {
+        console.error("RLS/Fetch Assigned Projects Error:", projError); // Added error logging
+        return [];
+    }
     return projects as Project[];
 };
 
@@ -463,7 +476,7 @@ export const getProjectRole = async (userId: string, projectId: number): Promise
         .eq('project_id', projectId)
         .single();
     
-    if (error || !data) return null;
+    if (error || !data) return null; // No assignment found or RLS blocks it
     return data.role as ProjectRole;
 }
 
@@ -547,7 +560,7 @@ export const fetchActiveBudgetLines = async (projectId: number): Promise<BudgetL
         .eq('is_active', true)
         .single();
         
-    if (bError || !budget) return []; // No active budget
+    if (bError || !budget) return []; // No active budget or RLS blocks it
 
     // Fetch lines
     const { data: lines, error: lError } = await supabase
@@ -555,7 +568,10 @@ export const fetchActiveBudgetLines = async (projectId: number): Promise<BudgetL
         .select('*')
         .eq('budget_id', budget.id);
         
-    if (lError) throw lError;
+    if (lError) {
+        console.error("RLS/Fetch Budget Lines Error:", lError); // Added error logging
+        throw lError;
+    }
     return lines as BudgetLine[];
 };
 
@@ -576,7 +592,7 @@ export const fetchProjectCostReport = async (projectId: number): Promise<BudgetL
         .in('budget_line_id', lineIds);
 
     if (allocError) {
-        console.error("Cost report fetch error:", allocError);
+        console.error("RLS/Cost report fetch error (allocations):", allocError); // Added error logging
         return lines;
     }
 
@@ -620,7 +636,7 @@ export const fetchVendorBudgetHistory = async (projectId: number, ico: string): 
             .limit(15);
 
         if (invError) {
-            console.error("History fetch error (invoices):", invError);
+            console.error("RLS/History fetch error (invoices):", invError); // Added error logging
             return [];
         }
 
@@ -638,7 +654,7 @@ export const fetchVendorBudgetHistory = async (projectId: number, ico: string): 
             .in('invoice_id', invoiceIds);
 
         if (allocError) {
-             console.error("History fetch error (allocations):", allocError);
+             console.error("RLS/History fetch error (allocations):", allocError); // Added error logging
              return [];
         }
 
@@ -653,7 +669,7 @@ export const fetchVendorBudgetHistory = async (projectId: number, ico: string): 
             .in('id', lineIds);
 
         if (linesError) {
-            console.error("History fetch error (lines):", linesError);
+            console.error("RLS/History fetch error (lines):", linesError); // Added error logging
             return [];
         }
 
@@ -673,7 +689,10 @@ export const fetchProjectAssignments = async (projectId: number): Promise<Projec
         .from('project_assignments')
         .select(`*, profile:profiles(id, full_name, email)`)
         .eq('project_id', projectId);
-    if (error) return [];
+    if (error) {
+        console.error("RLS/Fetch Project Assignments Error:", error); // Added error logging
+        return [];
+    }
     return data.map((item: any) => ({ ...item, profile: item.profile })) as ProjectAssignment[];
 };
 
@@ -683,7 +702,10 @@ export const fetchAssignmentsForOwner = async (ownerId: string): Promise<any[]> 
     .from('project_assignments')
     .select(`id, user_id, role, project_id, project:projects!inner(id, name, created_by)`)
     .eq('project.created_by', ownerId);
-  if (error) return [];
+  if (error) {
+      console.error("RLS/Fetch Assignments for Owner Error:", error); // Added error logging
+      return [];
+  }
   return data;
 };
 
@@ -707,7 +729,10 @@ export const removeProjectAssignment = async (assignmentId: number) => {
 export const fetchAllProfiles = async (): Promise<Profile[]> => {
   if (!supabase) return [];
   const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
-  if (error) throw error;
+  if (error) {
+      console.error("RLS/Fetch All Profiles Error:", error); // Added error logging
+      throw error;
+  }
   return data as Profile[];
 };
 
@@ -722,10 +747,15 @@ export const toggleUserDisabled = async (targetUserId: string, isDisabled: boole
 export const checkUserExistsGlobally = async (email: string): Promise<boolean> => {
   if (!supabase) return false;
   try {
+    // Attempt RPC first, if it fails, fallback to basic check
     const { data, error } = await supabase.rpc('check_email_exists_global', { target_email: email });
-    if (error) return checkUserExistsBasic(email);
+    if (error) {
+        console.warn("RPC check_email_exists_global failed, falling back to basic check:", error);
+        return checkUserExistsBasic(email);
+    }
     return !!data;
   } catch (e) {
+    console.warn("Error calling RPC check_email_exists_global, falling back to basic check:", e);
     return checkUserExistsBasic(email);
   }
 };
@@ -748,7 +778,7 @@ export const sendSystemInvitation = async (
   if (!supabase) throw new Error("Supabase not configured");
   const targetEmail = email.trim().toLowerCase();
   if (await checkUserExistsGlobally(targetEmail)) {
-    throw new Error("User with this email already exists in the system.");
+    throw new Error("User with this email already exists in the system or has a pending invitation.");
   }
   const user = await getCurrentUser();
   if (!user) throw new Error("You must be logged in to invite users.");
@@ -773,11 +803,11 @@ export const sendSystemInvitation = async (
       options: { shouldCreateUser: true, emailRedirectTo: window.location.origin }
     });
     if (authError) {
-      await deleteInvitation(inviteData.id);
+      await deleteInvitation(inviteData.id); // Rollback invitation if auth fails
       throw authError;
     }
   } catch (err) {
-    await deleteInvitation(inviteData.id);
+    await deleteInvitation(inviteData.id); // Rollback invitation if auth fails
     throw err;
   }
 };
@@ -785,7 +815,10 @@ export const sendSystemInvitation = async (
 export const fetchPendingInvitations = async (): Promise<UserInvitation[]> => {
   if (!supabase) return [];
   const { data, error } = await supabase.from('user_invitations').select('*').eq('status', 'pending').order('created_at', { ascending: false });
-  if (error) throw error;
+  if (error) {
+      console.error("RLS/Fetch Pending Invitations Error:", error); // Added error logging
+      throw error;
+  }
   return data as UserInvitation[];
 };
 
@@ -793,7 +826,10 @@ export const checkMyPendingInvitation = async (email: string): Promise<boolean> 
   if (!supabase) return false;
   const normalizedEmail = email.trim().toLowerCase();
   const { data, error } = await supabase.from('user_invitations').select('*').ilike('email', normalizedEmail).eq('status', 'pending').maybeSingle();
-  if (error) return false;
+  if (error) {
+      console.error("RLS/Check My Pending Invitation Error:", error); // Added error logging
+      return false; // Safely assume no pending invite if RLS blocks or error occurs
+  }
   return !!data;
 };
 

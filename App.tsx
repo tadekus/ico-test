@@ -1,20 +1,21 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import InvoicingModule from './components/InvoicingModule';
 import CostReportModule from './components/CostReportModule';
 import AdminDashboard from './components/AdminDashboard';
 import ApprovalModule from './components/ApprovalModule';
 import Auth, { SetupAccount } from './components/Auth';
 import { Profile, Project, ProjectRole } from './types';
-import { isSupabaseConfigured, signOut, supabase, getUserProfile, checkMyPendingInvitation, acceptInvitation, fetchAssignedProjects, getProjectRole } from './services/supabaseService';
+import { isSupabaseConfigured, signOut, supabase, getUserProfile, checkMyPendingInvitation, acceptInvitation, fetchAssignedProjects, getProjectRole, fetchProjects } from './services/supabaseService';
 import { User } from '@supabase/supabase-js';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<Profile | null>(null);
-  const [isLoadingSession, setIsLoadingSession] = useState(true);
-  const [isRedirecting, setIsRedirecting] = useState(false);
+  const [isLoadingSession, setIsLoadingSession] = useState(true); // Tracks initial Supabase session check (should resolve once)
+  const [isLoadingUserData, setIsLoadingUserData] = useState(false); // Tracks fetching profile, projects, etc.
   const [hasPendingInvite, setHasPendingInvite] = useState(false);
+  const [error, setError] = useState<string | null>(null); // Global error state for app issues
 
   // PROJECT CONTEXT
   const [assignedProjects, setAssignedProjects] = useState<Project[]>([]);
@@ -29,185 +30,254 @@ function App() {
   const [invoiceModuleKey, setInvoiceModuleKey] = useState(0);
 
   const configStatus = { gemini: !!process.env.API_KEY, supabase: isSupabaseConfigured };
+  const isMounted = useRef(true); // To prevent state updates on unmounted components
 
-  // SYSTEM ROLES
-  const isMasterUser = user?.email?.toLowerCase() === 'tadekus@gmail.com';
+  // SYSTEM ROLES (Derived from userProfile, not user)
+  const isMasterUser = userProfile?.email?.toLowerCase() === 'tadekus@gmail.com';
   const isAdmin = (userProfile?.app_role === 'admin') || isMasterUser;
   const isSuperuser = (userProfile?.app_role === 'superuser') || (userProfile?.is_superuser === true && !isAdmin);
 
-  useEffect(() => {
-    const initSession = async () => {
-        try {
-            if (configStatus.supabase && supabase) {
-                const { data: { session } } = await supabase.auth.getSession();
-                await handleUserSession(session?.user ?? null);
+  // --- Helper to manage user data (profile, projects) after auth session is known ---
+  const loadUserData = useCallback(async (currentUser: User | null) => {
+    if (!isMounted.current) return;
 
-                const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-                    if (event === 'SIGNED_OUT') {
-                         // Strictly clear everything
-                         setUser(null);
-                         setUserProfile(null);
-                         setAssignedProjects([]);
-                         setHasPendingInvite(false);
-                         setCurrentProject(null);
-                         setCurrentProjectRole(null);
-                         setIsRedirecting(false);
-                    } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-                        handleUserSession(session?.user ?? null);
-                    }
-                });
-                return () => subscription.unsubscribe();
-            } else {
-                setIsLoadingSession(false);
-            }
-        } catch (err) {
-            console.error("Init Error", err);
-            setIsLoadingSession(false);
-        }
-    };
-    initSession();
-  }, []);
+    setIsLoadingUserData(true); // Start loading user-specific data
+    // Reset relevant states before loading new user data
+    setUserProfile(null);
+    setHasPendingInvite(false);
+    setAssignedProjects([]);
+    setCurrentProject(null);
+    setCurrentProjectRole(null);
+    setError(null); 
 
-  useEffect(() => {
-    // Only update tabs if we are NOT in the middle of a redirect
-    if (isRedirecting || isLoadingSession) return;
-
-    if (isAdmin || isSuperuser) {
-      setActiveTab('admin');
-    } else if (currentProject && currentProjectRole === 'lineproducer') {
-      if (activeTab !== 'costreport') setActiveTab('invoicing');
-    } else if (currentProject && currentProjectRole === 'producer') {
-      if (activeTab !== 'costreport') setActiveTab('approval');
-    } else {
-      setActiveTab('dashboard');
+    if (!currentUser) {
+      setUser(null);
+      setIsLoadingUserData(false); // No user, so no user data to load
+      return;
     }
-  }, [isAdmin, isSuperuser, currentProject, currentProjectRole, isRedirecting, isLoadingSession]);
 
-  const handleUserSession = async (currentUser: User | null) => {
+    setUser(currentUser); // Update user state once confirmed
+    
     try {
-      if (currentUser?.id === user?.id && userProfile) {
-          if (currentUser) setUser(currentUser);
-          setIsLoadingSession(false);
-          return;
-      }
-
-      setUser(currentUser);
-      if (currentUser) {
-        if (currentUser.email) {
-          const isPending = await checkMyPendingInvitation(currentUser.email);
-          if (isPending) { 
-              setHasPendingInvite(true); 
-              setIsLoadingSession(false); 
-              return; 
+      // 1. Check for pending invitations
+      let isPendingInvitation = false;
+      if (currentUser.email) {
+        try {
+          isPendingInvitation = await checkMyPendingInvitation(currentUser.email);
+          if (isMounted.current && isPendingInvitation) {
+            setHasPendingInvite(true);
+            setIsLoadingUserData(false); // Done loading user data, user needs setup
+            return;
           }
+        } catch (inviteError: any) {
+          console.error("Error checking pending invitation:", inviteError);
+          // Don't block loading if invitation check fails, assume no pending.
+          if (isMounted.current) setError(inviteError.message || "Failed to check invitations.");
         }
-
-        let profile = await getUserProfile(currentUser.id);
-        
-        // Master Override
-        if (!profile && currentUser.email?.toLowerCase() === 'tadekus@gmail.com') {
-            profile = { id: currentUser.id, email: currentUser.email, full_name: 'Master Admin (Ghost)', app_role: 'admin', created_at: new Date().toISOString() };
-        }
-        
-        if (profile) setUserProfile(profile);
-
-        // Load Projects with Retry Logic
-        let projects = await fetchAssignedProjects(currentUser.id);
-        
-        if (projects.length === 0 && profile?.app_role === 'user') {
-             await new Promise(r => setTimeout(r, 800)); // Wait 800ms
-             projects = await fetchAssignedProjects(currentUser.id);
-        }
-
-        setAssignedProjects(projects);
-        
-        // AUTO-REDIRECT LOGIC (For Regular Users)
-        if (projects.length > 0 && profile?.app_role === 'user') {
-            setIsRedirecting(true);
-            try {
-              await handleProjectChange(projects[0].id.toString(), projects, currentUser);
-              // Explicitly set tab based on role we just fetched
-              const role = await getProjectRole(currentUser.id, projects[0].id);
-              if (role === 'lineproducer') setActiveTab('invoicing');
-              if (role === 'producer') setActiveTab('approval');
-            } catch (err) {
-              console.error("Auto-redirect failed", err);
-            } finally {
-              setIsRedirecting(false);
-              setIsLoadingSession(false);
-            }
-        } else {
-            setCurrentProject(null);
-            setCurrentProjectRole(null);
-            setIsLoadingSession(false);
-        }
-
-      } else {
-        setUserProfile(null);
-        setHasPendingInvite(false);
-        setAssignedProjects([]);
-        setCurrentProject(null);
-        setCurrentProjectRole(null);
-        setIsLoadingSession(false);
       }
-    } catch (error) {
-      console.error("Session loading error:", error);
-      setIsLoadingSession(false);
-    }
-  };
 
-  const handleProjectChange = async (projectId: string, projectsList = assignedProjects, targetUser: User | null = user) => {
+      // 2. Fetch User Profile
+      let profile = await getUserProfile(currentUser.id);
+
+      // Master Override (If no profile found for master admin, create a ghost one)
+      if (!profile && currentUser.email?.toLowerCase() === 'tadekus@gmail.com') {
+        profile = { id: currentUser.id, email: currentUser.email, full_name: 'Master Admin (Ghost)', app_role: 'admin', created_at: new Date().toISOString() };
+        console.warn("Master Admin profile not found, using Ghost profile.");
+      }
+      
+      if (isMounted.current && profile) {
+          setUserProfile(profile);
+
+          // 3. Fetch Projects (only for non-admin/superuser)
+          // Derive roles again here for fresh calculation
+          const currentUserIsMaster = currentUser.email?.toLowerCase() === 'tadekus@gmail.com';
+          const currentUserIsAdmin = (profile.app_role === 'admin') || currentUserIsMaster;
+          const currentUserIsSuperuser = (profile.app_role === 'superuser') || (profile.is_superuser === true && !currentUserIsAdmin);
+
+          if (!currentUserIsAdmin && !currentUserIsSuperuser) {
+              let projects = await fetchAssignedProjects(currentUser.id);
+              if (isMounted.current) {
+                  setAssignedProjects(projects);
+                  // Auto-select first project for regular users
+                  if (projects.length > 0) {
+                      try {
+                          await handleProjectChange(projects[0].id.toString(), projects, currentUser);
+                      } catch (projChangeError) {
+                          console.error("Auto-project select failed", projChangeError);
+                          if (isMounted.current) setError("Failed to auto-select project.");
+                      }
+                  } else {
+                      setCurrentProject(null); // No projects assigned
+                      setCurrentProjectRole(null);
+                  }
+              }
+          } else {
+              // For Admin/Superuser, fetch ALL projects to manage
+              const allProjects = await fetchProjects();
+              if (isMounted.current) setAssignedProjects(allProjects);
+              setCurrentProject(null); // Admin/Superuser typically don't have a 'current' project in the same way
+              setCurrentProjectRole(null);
+          }
+      } else if (!profile && isMounted.current) {
+          // If user exists but no profile record, trigger setup account flow
+          // (Only if not a pending invitation that's already handled, and not master admin)
+          if (!isPendingInvitation && currentUser.email?.toLowerCase() !== 'tadekus@gmail.com') { 
+              setHasPendingInvite(true); // Use this to signify "needs setup" regardless of invite status
+          }
+      }
+    } catch (loadError: any) {
+      console.error("Error loading user data:", loadError);
+      if (isMounted.current) setError(loadError.message || "Failed to load user data.");
+    } finally {
+      if (isMounted.current) setIsLoadingUserData(false); // Always stop loading user-specific data
+    }
+  }, [configStatus.supabase]); // Dependencies updated to reflect parameters and remove redundant state dependencies
+
+  // --- EFFECT 1: Initial Session Check on Mount ---
+  useEffect(() => {
+    isMounted.current = true; // Set ref on mount
+
+    const initSession = async () => {
+      try {
+        if (!configStatus.supabase || !supabase) {
+          console.warn("Supabase not configured. Skipping session check.");
+          if (isMounted.current) setIsLoadingSession(false);
+          return;
+        }
+
+        setIsLoadingSession(true); // Ensure initial session spinner is active
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        if (sessionError) {
+          console.error("Error fetching initial session:", sessionError);
+          if (isMounted.current) setError(sessionError.message || "Failed to fetch initial session.");
+        }
+        
+        // After initial session status is known, dismiss the session loading spinner
+        if (isMounted.current) setIsLoadingSession(false);
+
+        // Then, proceed to load user-specific data
+        await loadUserData(session?.user ?? null);
+        
+      } catch (err: any) {
+        console.error("Error in initSession:", err);
+        if (isMounted.current) setError(err.message || "Failed during initial session setup.");
+      } finally {
+        if (isMounted.current) setIsLoadingSession(false); // Double-ensure initial session loading is off
+      }
+    };
+
+    initSession();
+
+    return () => {
+      isMounted.current = false; // Cleanup ref on unmount
+    };
+  }, [loadUserData, configStatus.supabase]);
+
+  // --- EFFECT 2: Supabase Auth State Change Listener ---
+  useEffect(() => {
+    if (!configStatus.supabase || !supabase) return;
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted.current) return;
+      console.log("Auth State Change:", event, session?.user?.email);
+
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+          // On auth change, re-load user data; loadUserData manages its own loading state (isLoadingUserData)
+          await loadUserData(session?.user ?? null);
+      } else if (event === 'SIGNED_OUT') {
+          // Explicit sign-out or session invalidation; reset all relevant states
+          setUser(null);
+          setUserProfile(null);
+          setAssignedProjects([]);
+          setHasPendingInvite(false);
+          setCurrentProject(null);
+          setCurrentProjectRole(null);
+          setIsLoadingUserData(false); // Ensure user data loading is off
+          setIsLoadingSession(false); // Ensure initial session loading is off (should already be false)
+          setError(null); // Clear any errors
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [loadUserData, configStatus.supabase]);
+
+
+  const handleProjectChange = useCallback(async (projectId: string, projectsList = assignedProjects, targetUser: User | null = user) => {
+      if (!targetUser || !isMounted.current) return;
+      
       const proj = projectsList.find(p => p.id.toString() === projectId) || null;
       setCurrentProject(proj);
+      setTargetInvoiceId(null); // Clear any deep-linked invoice when project changes
       
-      setTargetInvoiceId(null);
-      
-      if (proj && targetUser) {
-          const role = await getProjectRole(targetUser.id, proj.id);
-          setCurrentProjectRole(role);
+      if (proj) {
+          try {
+              const role = await getProjectRole(targetUser.id, proj.id);
+              if (isMounted.current) setCurrentProjectRole(role);
+          } catch (roleError: any) {
+              console.error("Error fetching project role:", roleError);
+              if (isMounted.current) setError(roleError.message || "Failed to get project role.");
+              if (isMounted.current) setCurrentProjectRole(null);
+          }
       } else {
-          setCurrentProjectRole(null);
+          if (isMounted.current) setCurrentProjectRole(null);
       }
-  };
+  }, [assignedProjects, user]); // Depend on assignedProjects and user for stability
 
   const handleInvoicingTabClick = () => {
       if (activeTab === 'invoicing' && currentProject) {
           sessionStorage.removeItem(`viewingInvoice_${currentProject.id}`);
-          setInvoiceModuleKey(prev => prev + 1);
-          setTargetInvoiceId(null);
+          setInvoiceModuleKey(prev => prev + 1); // Force remount of InvoicingModule
+          setTargetInvoiceId(null); // Clear deep-linked invoice for fresh view
       }
       setActiveTab('invoicing');
   };
 
-  const handleSetupSuccess = async () => {
-    if (user?.email) { 
-        await acceptInvitation(user.email); 
-        setHasPendingInvite(false); 
-        await handleSignOut(); 
-        alert("Setup complete! Please sign in."); 
+  const handleSetupSuccess = useCallback(async () => {
+    if (user?.email && isMounted.current) { 
+        try {
+            await acceptInvitation(user.email); 
+            // After successful setup, re-load user data to update profile/roles
+            // loadUserData will manage setIsLoadingUserData
+            await loadUserData(user); 
+            if (isMounted.current) setHasPendingInvite(false); // Clear setup state
+        } catch (setupError: any) {
+            console.error("Account setup success handler error:", setupError);
+            if (isMounted.current) setError(setupError.message || "Account setup failed to finalize.");
+        }
     }
-  };
+  }, [user, loadUserData]);
 
-  const handleSignOut = async () => { 
+  const handleSignOut = useCallback(async () => { 
       try {
         await signOut(); 
+        // Explicitly reset states here for immediate UI feedback.
+        // The onAuthStateChange listener will also fire, reinforcing this.
+        if (isMounted.current) {
+            setUser(null);
+            setUserProfile(null);
+            setAssignedProjects([]);
+            setHasPendingInvite(false);
+            setCurrentProject(null);
+            setCurrentProjectRole(null);
+            setIsLoadingUserData(false);
+            setIsLoadingSession(false); // Ensure initial loading is off
+            setError(null);
+            window.location.reload(); // Force full page reload for complete state clear
+        }
       } catch (e) {
         console.error("Signout error", e);
-      } finally {
-        setUser(null); 
-        setUserProfile(null); 
-        setHasPendingInvite(false); 
-        setAssignedProjects([]);
-        setCurrentProject(null);
-        setActiveTab('dashboard');
+        if (isMounted.current) setError((e as Error).message || "Signout failed.");
       }
-  };
+  }, []);
   
-  const handleNavigateToInvoice = (invoiceId: number) => {
+  const handleNavigateToInvoice = useCallback((invoiceId: number) => {
       setTargetInvoiceId(invoiceId);
+      // Determine tab based on user's current effective role for the project, not global app_role
+      // This logic should ideally be more nuanced if roles vary per project for a single user
       if (currentProjectRole === 'lineproducer') setActiveTab('invoicing');
       if (currentProjectRole === 'producer') setActiveTab('approval');
-  };
+  }, [currentProjectRole]); // Depend on currentProjectRole
 
   let headerRole = 'User';
   if (currentProjectRole) {
@@ -225,7 +295,29 @@ function App() {
   const isLineProducer = currentProjectRole === 'lineproducer';
   const isProducer = currentProjectRole === 'producer';
 
-  if (isLoadingSession || isRedirecting) return (
+  // --- CONDITIONAL RENDERING ---
+  // 1. Critical configuration missing
+  if (!configStatus.gemini) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-red-50 text-red-800 p-4">
+        <p className="text-center font-medium">
+          Error: Gemini API Key is missing. Please configure `API_KEY` environment variable.
+        </p>
+      </div>
+    );
+  }
+  if (!configStatus.supabase) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-red-50 text-red-800 p-4">
+        <p className="text-center font-medium">
+          Error: Supabase URL or Anon Key is missing. Please configure `SUPABASE_URL` and `SUPABASE_ANON_KEY` environment variables.
+        </p>
+      </div>
+    );
+  }
+
+  // 2. Initial session loading spinner
+  if (isLoadingSession) return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
           <div className="flex flex-col items-center gap-4">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
@@ -234,9 +326,24 @@ function App() {
       </div>
   );
   
-  if (hasPendingInvite && user?.email) return <SetupAccount email={user.email} onSuccess={handleSetupSuccess} />;
-  if (configStatus.supabase && !user) return <Auth />;
+  // 3. Authentication (login/signup) if no user session
+  if (!user) return <Auth />;
 
+  // 4. Account setup if invited user has no full_name or profile
+  // This state is set by loadUserData and cleared by handleSetupSuccess
+  if (hasPendingInvite && user?.email) return <SetupAccount email={user.email} onSuccess={handleSetupSuccess} />;
+  
+  // 5. Loading user profile/projects (after initial session, before main app)
+  if (isLoadingUserData) return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+          <div className="flex flex-col items-center gap-4">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+            <p className="text-slate-400 text-sm">Fetching user data...</p>
+          </div>
+      </div>
+  );
+
+  // 6. Main Application Content
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50/50 flex flex-col">
         {/* TOP BAR */}
@@ -289,6 +396,11 @@ function App() {
                 </div>
 
                 <div className="flex items-center gap-4">
+                    {error && (
+                        <div className="text-red-500 text-xs px-2 py-1 bg-red-100 rounded-lg">
+                            {error}
+                        </div>
+                    )}
                     <div className="text-right hidden sm:block">
                         <div className="text-sm font-medium text-slate-900">{userProfile?.full_name || user?.email}</div>
                         <div className="text-xs text-indigo-600 font-bold uppercase tracking-wider flex justify-end items-center gap-1">
