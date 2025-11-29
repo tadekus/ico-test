@@ -51,10 +51,11 @@ const App: React.FC = () => {
       if (session?.user) {
         setCurrentUser(session.user);
         setSetupAccountEmail(session.user.email ?? null); // Coalesce undefined to null
-        // Check if user has a pending invitation to claim role
         const hasPendingInvitation = await checkMyPendingInvitation(session.user.email || '');
         if (hasPendingInvitation) {
             setShowSetupAccount(true);
+        } else {
+            setShowSetupAccount(false); // Explicitly ensure false if no pending invite
         }
       } else {
         setCurrentUser(null);
@@ -62,7 +63,7 @@ const App: React.FC = () => {
         setProjects([]);
         setCurrentProject(null);
         setUserRole(null);
-        setShowSetupAccount(false);
+        setShowSetupAccount(false); // Explicitly clear on logout
         setSetupAccountEmail(null);
       }
       setAuthLoading(false);
@@ -76,8 +77,13 @@ const App: React.FC = () => {
       if (session?.user) {
         setCurrentUser(session.user);
         setSetupAccountEmail(session.user.email ?? null); // Coalesce undefined to null
+        // The onAuthStateChange listener will handle setting `showSetupAccount` based on pending invite.
+      } else {
+        setCurrentUser(null);
+        setSetupAccountEmail(null);
+        setShowSetupAccount(false); // Ensure cleared even if onAuthStateChange is delayed
       }
-      setAuthLoading(false);
+      // authLoading will be set to false by onAuthStateChange event triggered by getSession
     };
 
     checkSession();
@@ -91,7 +97,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadProfileAndProjects = async () => {
       if (!currentUser) {
-        setLoading(false);
+        setLoading(false); // No current user, so no profile/projects to load. Stop loading.
         setProfile(null);
         setProjects([]);
         setCurrentProject(null);
@@ -99,71 +105,92 @@ const App: React.FC = () => {
         return;
       }
 
-      setLoading(true);
+      // If we are showing SetupAccount, don't proceed with main app loading.
+      if (showSetupAccount) {
+          setLoading(false); // IMPORTANT: Stop loading here if we're waiting for setup.
+          return;
+      }
+
+      setLoading(true); // Start loading for profile/projects
       setError(null);
       try {
         const userProfile = await getUserProfile(currentUser.id);
-        if (!userProfile) {
-          throw new Error("User profile not found. Please contact support.");
-        }
-        setProfile(userProfile);
         
-        // If profile exists but full_name is missing, show setup account
-        if (!userProfile.full_name && !showSetupAccount) {
-            console.log("Profile missing full name, showing setup account.");
+        if (!userProfile) {
+          // Critical state: user is authenticated but has no profile record.
+          // This must trigger the SetupAccount flow.
+          console.log("Authenticated user has no profile. Forcing setup account.");
+          setShowSetupAccount(true);
+          setSetupAccountEmail(currentUser.email ?? null);
+          setLoading(false); // Stop loading, as SetupAccount UI will take over.
+          return;
+        }
+        
+        // If profile *is* found but full_name is missing, show setup account.
+        if (userProfile && !userProfile.full_name) {
+            console.log("Profile found but full name missing, showing setup account.");
             setShowSetupAccount(true);
-            setLoading(false);
+            setSetupAccountEmail(currentUser.email ?? null);
+            setLoading(false); // Stop loading, SetupAccount UI will take over.
             return;
         }
 
-        // Fetch projects based on app role
-        let fetchedProjects: Project[] = [];
-        if (userProfile.app_role === 'admin') {
-          fetchedProjects = await fetchProjects(); // Admins see all projects
-          setActiveModule('admin'); // Default to admin dashboard
-          setUserRole('admin'); // Set app-level role
-        } else {
-          // Superusers and regular users see projects they own or are assigned to
-          fetchedProjects = await fetchAssignedProjects(currentUser.id);
-          // Also fetch projects they created (owner) which might not be in assignments
-          const ownedProjects = await fetchProjects(); // Fetch all and filter locally for created_by
-          const uniqueOwnedProjects = ownedProjects.filter(p => p.created_by === currentUser?.id && !fetchedProjects.some(fp => fp.id === p.id));
-          fetchedProjects = [...fetchedProjects, ...uniqueOwnedProjects];
-          
-          if (userProfile.app_role === 'superuser') {
-              setUserRole('superuser'); // Set app-level role
-          } else {
-              // Default to 'user' for app_role, actual project_role will be fetched later
-              setUserRole('user');
-          }
-          setActiveModule('invoicing'); // Default to invoicing for team members/superusers
-        }
-        
-        setProjects(fetchedProjects);
-        
-        // Set initial project if none selected or if previously selected project is no longer available
-        if (fetchedProjects.length > 0) {
-            const storedProjectId = localStorage.getItem('currentProjectId');
-            const storedProject = storedProjectId ? fetchedProjects.find(p => p.id === parseInt(storedProjectId)) : null;
-            setCurrentProject(storedProject || fetchedProjects[0]);
-        } else {
-            setCurrentProject(null);
+        // If we reach here, profile should be valid and complete.
+        setProfile(userProfile); // Set the profile if it's found and valid
+
+        // Proceed to fetch projects ONLY if setup account is NOT active and profile is valid
+        // (showSetupAccount is already checked above and returns if true)
+        if (userProfile) { // Redundant check, but for clarity
+            let fetchedProjects: Project[] = [];
+            if (userProfile.app_role === 'admin') {
+              fetchedProjects = await fetchProjects(); // Admins see all projects
+              setActiveModule('admin'); // Default to admin dashboard
+              setUserRole('admin'); // Set app-level role
+            } else {
+              // Superusers and regular users see projects they own or are assigned to
+              fetchedProjects = await fetchAssignedProjects(currentUser.id);
+              // Also fetch projects they created (owner) which might not be in assignments
+              const ownedProjects = await fetchProjects(); // Fetch all and filter locally for created_by
+              const uniqueOwnedProjects = ownedProjects.filter(p => p.created_by === currentUser?.id && !fetchedProjects.some(fp => fp.id === p.id));
+              fetchedProjects = [...fetchedProjects, ...uniqueOwnedProjects];
+              
+              if (userProfile.app_role === 'superuser') {
+                  setUserRole('superuser'); // Set app-level role
+              } else {
+                  // Default to 'user' for app_role, actual project_role will be fetched later
+                  setUserRole('user');
+              }
+              setActiveModule('invoicing'); // Default to invoicing for team members/superusers
+            }
+            
+            setProjects(fetchedProjects);
+            
+            // Set initial project if none selected or if previously selected project is no longer available
+            if (fetchedProjects.length > 0) {
+                const storedProjectId = localStorage.getItem('currentProjectId');
+                const storedProject = storedProjectId ? fetchedProjects.find(p => p.id === parseInt(storedProjectId)) : null;
+                setCurrentProject(storedProject || fetchedProjects[0]);
+            } else {
+                setCurrentProject(null);
+            }
         }
 
       } catch (err: any) {
         console.error("Error loading profile or projects:", err);
         setError(err.message || "Failed to load user data.");
       } finally {
-        setLoading(false);
+        setLoading(false); // IMPORTANT: Always dismiss loading spinner here
       }
     };
 
-    if (currentUser && !showSetupAccount) {
+    // Trigger profile/project loading only if currentUser is set AND authLoading is false (initial check complete)
+    // AND we are not already showing the setup account.
+    if (currentUser && !authLoading && !showSetupAccount) {
       loadProfileAndProjects();
     } else if (!currentUser) {
-        setLoading(false); // No current user, not loading profile/projects
+        setLoading(false); // No current user means nothing to load in this effect.
     }
-  }, [currentUser, showSetupAccount]);
+  }, [currentUser, authLoading, showSetupAccount]);
 
   // --- Update Project Role based on Current Project ---
   useEffect(() => {
@@ -178,8 +205,11 @@ const App: React.FC = () => {
         setUserRole(null);
       }
     };
-    updateProjectRole();
-  }, [profile, currentProject]);
+    // Only update role if profile and currentProject exist and main loading is done.
+    if (profile && currentProject && !loading) {
+        updateProjectRole();
+    }
+  }, [profile, currentProject, loading]);
 
   // --- Handle Project Selection ---
   const handleSelectProject = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
