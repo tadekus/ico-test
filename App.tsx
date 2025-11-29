@@ -31,11 +31,18 @@ const App: React.FC = () => {
       return;
     }
 
+    if (!supabase) { // Add null check for supabase
+      setError("Supabase client not initialized.");
+      setLoading(false);
+      setAuthLoading(false);
+      return;
+    }
+
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log("Auth state changed:", event, session);
       if (session?.user) {
         setCurrentUser(session.user);
-        setSetupAccountEmail(session.user.email);
+        setSetupAccountEmail(session.user.email ?? null); // Coalesce undefined to null
         // Check if user has a pending invitation to claim role
         const hasPendingInvitation = await checkMyPendingInvitation(session.user.email || '');
         if (hasPendingInvitation) {
@@ -55,10 +62,11 @@ const App: React.FC = () => {
 
     // Initial check for session
     const checkSession = async () => {
+      if (!supabase) return; // Add null check for supabase
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         setCurrentUser(session.user);
-        setSetupAccountEmail(session.user.email);
+        setSetupAccountEmail(session.user.email ?? null); // Coalesce undefined to null
       }
       setAuthLoading(false);
     };

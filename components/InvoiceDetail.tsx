@@ -196,7 +196,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
           const stampedPdfBytes = await stampInvoicePdf(loadedFileContent, invoice, project, allocations);
           
           // Trigger Download
-          const blob = new Blob([stampedPdfBytes], { type: 'application/pdf' });
+          const blob = new Blob([stampedPdfBytes as Uint8Array], { type: 'application/pdf' }); // Cast to Uint8Array
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;

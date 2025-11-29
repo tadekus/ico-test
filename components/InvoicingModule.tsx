@@ -206,7 +206,8 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
 
   const handleDownloadStampFromList = async (e: React.MouseEvent, invoiceToStamp: SavedInvoice) => {
       e.stopPropagation(); // Prevent opening detail view
-      if (!currentProject || !invoiceToStamp.id || !invoiceToStamp.has_allocations) return; // Should be disabled if not ready
+      // Check for necessary properties, defaulting total_allocated_amount to 0 for safety
+      if (!currentProject || !invoiceToStamp.id || !invoiceToStamp.has_allocations || (invoiceToStamp.amount_without_vat === null || invoiceToStamp.amount_without_vat === undefined)) return; 
 
       try {
           // Fetch full content on demand as list doesn't carry it
@@ -217,7 +218,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
 
           const stampedPdfBytes = await stampInvoicePdf(fileContent, invoiceToStamp, currentProject, allocations);
           
-          const blob = new Blob([stampedPdfBytes], { type: 'application/pdf' });
+          const blob = new Blob([stampedPdfBytes as Uint8Array], { type: 'application/pdf' }); // Cast to Uint8Array
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
@@ -489,8 +490,9 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                    <tbody className="divide-y divide-slate-100 text-sm">
                        {sortedInvoices.map(inv => {
                            // Check if invoice is balanced for stamp button
-                           const isInvoiceBalanced = (inv.amount_without_vat !== null && inv.total_allocated_amount !== null) && 
-                               Math.abs(inv.amount_without_vat - inv.total_allocated_amount) <= 1.0;
+                           const isInvoiceBalanced = (inv.amount_without_vat !== null && inv.amount_without_vat !== undefined) && 
+                               (inv.total_allocated_amount !== null && inv.total_allocated_amount !== undefined) && // Add explicit check
+                               Math.abs(inv.amount_without_vat - (inv.total_allocated_amount ?? 0)) <= 1.0; // Use nullish coalescing here
 
                            return (
                                <tr key={inv.id} 
