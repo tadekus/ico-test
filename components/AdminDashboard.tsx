@@ -946,4 +946,4 @@ DO $$ BEGIN
 
     RAISE NOTICE 'Initial admin profile setup complete.';
 END $$;
-`; // <<< This closing backtick was the likely culprit for TS1160
+`;
