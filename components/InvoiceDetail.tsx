@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect } from 'react';
 import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
 import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory, fetchInvoiceFileContent } from '../services/supabaseService';
+import { stampInvoicePdf } from '../services/pdfService';
 
 interface InvoiceDetailProps {
   invoice: SavedInvoice;
@@ -82,10 +82,11 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
   const invoiceTotal = editedResult?.amountWithoutVat || 0;
   const unallocated = invoiceTotal - totalAllocated;
-  const isBalanced = Math.abs(unallocated) <= 1; // Allow small tolerance for UI
+  // Allow strict tolerance
+  const isBalanced = Math.abs(unallocated) <= 1.0; 
 
   const handleSave = async (targetStatus: SavedInvoice['status'] = 'approved') => {
-    setSaveStatus('idle'); // Reset status
+    setSaveStatus('idle'); 
     setErrorMessage(null);
     
     // RECALCULATE STRICTLY INSIDE HANDLER
@@ -155,6 +156,21 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
       setShowRejectModal(false);
   }
 
+  const handleDownloadStamp = async () => {
+      if (!project || !loadedFileContent) return;
+      try {
+          const stampedPdfBytes = await stampInvoicePdf(loadedFileContent, invoice, project, allocations);
+          const blob = new Blob([stampedPdfBytes], { type: 'application/pdf' });
+          const url = window.URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `stamped_invoice_${invoice.internal_id}.pdf`;
+          link.click();
+      } catch (err: any) {
+          alert("Failed to generate stamped PDF: " + err.message);
+      }
+  };
+
   const handleInputChange = (field: keyof ExtractionResult, value: string | number) => {
     if (isLocked) return;
     setEditedResult(prev => prev ? ({ ...prev, [field]: value }) : null);
@@ -215,10 +231,12 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   };
 
   const filteredBudgetLines = allocationSearch && !selectedBudgetLine
-    ? budgetLines.filter(l => 
-        l.account_number.toLowerCase().includes(allocationSearch.toLowerCase()) || 
-        l.account_description.toLowerCase().includes(allocationSearch.toLowerCase())
-      ).slice(0, 20)
+    ? budgetLines.filter(l => {
+        const searchStr = allocationSearch.toLowerCase();
+        const accNum = (l.account_number || '').toLowerCase();
+        const accDesc = (l.account_description || '').toLowerCase();
+        return accNum.includes(searchStr) || accDesc.includes(searchStr);
+      }).slice(0, 20)
     : [];
 
   const availableSuggestions = suggestedLines.filter(line => !allocations.some(a => a.budget_line_id === line.id));
@@ -365,15 +383,24 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                     <button onClick={() => handleProducerAction('approve')} className="bg-emerald-600 text-white hover:bg-emerald-700 py-2 rounded-lg font-medium text-sm shadow-sm">Final Approve</button>
                 </div>
             ) : !isLocked ? (
-                <button 
-                    onClick={() => handleSave('approved')} 
-                    // Note: We intentionally DO NOT disable the button for validation errors
-                    // so the user can click it and see the error message.
-                    disabled={saveStatus === 'saving' || saveStatus === 'success'} 
-                    className={`w-full py-2 rounded-lg text-white font-medium shadow-sm transition-all text-sm ${saveStatus === 'success' ? 'bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-700'} disabled:opacity-50 disabled:bg-slate-400`}
-                >
-                    {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved' : (isRejected ? 'Re-Submit for Approval' : (invoice.status === 'approved' ? 'Re-approve Invoice' : 'Approve Invoice'))}
-                </button>
+                <div className="flex gap-2">
+                    <button 
+                        onClick={() => handleSave('approved')} 
+                        disabled={saveStatus === 'saving' || saveStatus === 'success'} 
+                        className={`flex-1 py-2 rounded-lg text-white font-medium shadow-sm transition-all text-sm ${saveStatus === 'success' ? 'bg-emerald-500' : 'bg-indigo-600 hover:bg-indigo-700'} disabled:opacity-50 disabled:bg-slate-400`}
+                    >
+                        {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'success' ? 'Saved' : (isRejected ? 'Re-Submit for Approval' : (invoice.status === 'approved' ? 'Re-approve Invoice' : 'Approve Invoice'))}
+                    </button>
+                    {isBalanced && (
+                        <button 
+                            onClick={handleDownloadStamp}
+                            className="bg-slate-800 hover:bg-slate-900 text-white px-3 py-2 rounded-lg shadow-sm"
+                            title="Download Stamped PDF"
+                        >
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        </button>
+                    )}
+                </div>
             ) : (
                 <div className="text-center text-xs text-slate-400 italic py-2">Invoice is locked.</div>
             )}
