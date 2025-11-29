@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
 import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory, fetchInvoiceFileContent } from '../services/supabaseService';
@@ -489,4 +488,3 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 };
 
 export default InvoiceDetail;
-    

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
@@ -611,4 +610,3 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
 };
 
 export default InvoicingModule;
-    
