@@ -8,28 +8,31 @@ export const stampInvoicePdf = async (
   allocations: InvoiceAllocation[]
 ): Promise<Uint8Array> => {
   try {
-    // 1. Load the PDF
-    const pdfDoc = await PDFDocument.load(originalPdfBase64);
+    // 1. Convert base64 string to Uint8Array for PDF-Lib loading
+    const pdfBytesToLoad = Uint8Array.from(atob(originalPdfBase64), c => c.charCodeAt(0));
+    
+    // 2. Load the PDF using the converted bytes
+    const pdfDoc = await PDFDocument.load(pdfBytesToLoad);
     const pages = pdfDoc.getPages();
     const firstPage = pages[0];
     const { width, height } = firstPage.getSize();
 
-    // 2. Prepare Fonts
+    // 3. Prepare Fonts
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-    // 3. Prepare Text Content
+    // 4. Prepare Text Content
     const projectText = `Project: ${project.name} (#${project.id})`;
     const invoiceText = `Internal Invoice ID: #${invoice.internal_id}`;
     
-    // Summarize allocations (e.g., "1001: 5000 | 2005: 1200")
+    // Summarize allocations (e.g., "1001: 5 000.00 CZK | 2005: 1 200.00 CZK")
     const allocationSummary = allocations.map(a => 
-      `${a.budget_line?.account_number || '?'}: ${new Intl.NumberFormat('cs-CZ').format(a.amount)}`
+      `${a.budget_line?.account_number || '?'}: ${new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(a.amount)} ${project.currency}`
     ).join(' | ');
     
     const allocationText = `Allocations: ${allocationSummary}`;
 
-    // 4. Draw Background Rectangle (Footer)
+    // 5. Draw Background Rectangle (Footer)
     // Draw a white box at the bottom to ensure text is readable
     const footerHeight = 50;
     firstPage.drawRectangle({
@@ -41,7 +44,7 @@ export const stampInvoicePdf = async (
       opacity: 0.9,
     });
 
-    // 5. Draw Text
+    // 6. Draw Text
     const fontSize = 10;
     const textColor = rgb(0, 0, 0);
     const yPosition = 30;
@@ -65,12 +68,12 @@ export const stampInvoicePdf = async (
       color: rgb(0.2, 0.2, 0.2),
     });
 
-    // 6. Save
-    const pdfBytes = await pdfDoc.save();
-    return pdfBytes;
+    // 7. Save
+    const stampedPdfBytes = await pdfDoc.save(); // Use a different name for output bytes
+    return stampedPdfBytes;
 
   } catch (error) {
     console.error("Error stamping PDF:", error);
-    throw new Error("Failed to generate PDF stamp.");
+    throw new Error("Failed to generate PDF stamp. " + (error as Error).message);
   }
 };

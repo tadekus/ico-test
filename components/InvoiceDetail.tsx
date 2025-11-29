@@ -5,7 +5,7 @@ import { stampInvoicePdf } from '../services/pdfService';
 
 interface InvoiceDetailProps {
   invoice: SavedInvoice;
-  fileData: FileData;
+  fileData: FileData; // Used for initial content of new uploads
   project: Project | null;
   nextDraftId: number | null; 
   onBack: () => void;
@@ -17,7 +17,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const [editedResult, setEditedResult] = useState<ExtractionResult | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [loadedFileContent, setLoadedFileContent] = useState<string | undefined>(fileData.base64);
+  const [loadedFileContent, setLoadedFileContent] = useState<string | undefined>(undefined); // Manually managed, stable
 
   // Budget Allocation State
   const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([]);
@@ -37,8 +37,11 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const isReadyForReview = invoice.status === 'approved';
   const isRejected = invoice.status === 'rejected';
 
+  // --- PRIMARY EFFECT: Load ALL invoice-specific data when invoice.id or project.id changes ---
   useEffect(() => {
-    // Reset State
+    let isMounted = true; // Flag to prevent state updates on unmounted components
+
+    // 1. Reset all transient UI state for a new invoice
     setSaveStatus('idle');
     setErrorMessage(null);
     setAllocations([]);
@@ -47,36 +50,63 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setAllocationAmount(0);
     setSuggestedLines([]);
     
-    // Load file content if missing (Performance optimization)
-    if (!fileData.base64 && invoice.id) {
-        fetchInvoiceFileContent(invoice.id).then(content => {
-            if (content) setLoadedFileContent(content);
-        });
+    // 2. Initialize editable fields from current invoice props
+    // We prioritize saved invoice data, fallback to extractionResult if it's a very new unsaved one
+    setEditedResult({
+        ico: invoice.ico || fileData.extractionResult?.ico || null,
+        companyName: invoice.company_name || fileData.extractionResult?.companyName || null,
+        bankAccount: invoice.bank_account || fileData.extractionResult?.bankAccount || null,
+        iban: invoice.iban || fileData.extractionResult?.iban || null,
+        variableSymbol: invoice.variable_symbol || fileData.extractionResult?.variableSymbol || null,
+        description: invoice.description || fileData.extractionResult?.description || null,
+        amountWithVat: invoice.amount_with_vat || fileData.extractionResult?.amountWithVat || null,
+        amountWithoutVat: invoice.amount_without_vat || fileData.extractionResult?.amountWithoutVat || null,
+        currency: invoice.currency || fileData.extractionResult?.currency || null,
+        confidence: invoice.confidence || fileData.extractionResult?.confidence || 0,
+        rawText: invoice.raw_text || fileData.extractionResult?.rawText || undefined
+    });
+
+    // 3. Load PDF/File Content
+    // Prioritize fileData.base64 (if it's a fresh upload being viewed)
+    // Otherwise, check if invoice.file_content exists (for existing saved invoices)
+    // If neither, then try to fetch from DB for existing invoices that might not have file_content loaded yet.
+    if (fileData.base64) {
+      setLoadedFileContent(fileData.base64); 
+    } else if (invoice.file_content) {
+      setLoadedFileContent(invoice.file_content); // Already in invoice object
+    }
+    else if (invoice.id) { // Only fetch if neither prop has it and it's a saved invoice
+      fetchInvoiceFileContent(invoice.id).then(content => {
+          if (content && isMounted) setLoadedFileContent(content);
+      }).catch(e => console.error("Failed to fetch invoice file content:", e));
     } else {
-        setLoadedFileContent(fileData.base64);
+      setLoadedFileContent(undefined); // Clear if no content/ID
     }
     
-    if (project) {
-        fetchActiveBudgetLines(project.id).then(setBudgetLines).catch(console.error);
+    // 4. Fetch Budget Lines, Allocations, and Vendor History
+    if (project?.id) {
+        fetchActiveBudgetLines(project.id).then(lines => {
+            if (isMounted) setBudgetLines(lines);
+        }).catch(e => console.error("Failed to fetch budget lines:", e));
+
         fetchInvoiceAllocations(invoice.id).then(async (currentAllocations) => {
-            setAllocations(currentAllocations);
-            if (invoice.ico && !isLocked) { // Don't fetch suggestions if locked
-                try {
-                    const history = await fetchVendorBudgetHistory(project.id, invoice.ico);
-                    if (history.length > 0) setSuggestedLines(history);
-                } catch (e) { console.error(e); }
+            if (isMounted) {
+                setAllocations(currentAllocations);
+                // Fetch suggestions only if not locked and IČO exists
+                if (invoice.ico && !isLocked) {
+                    try {
+                        const history = await fetchVendorBudgetHistory(project.id, invoice.ico);
+                        if (history.length > 0 && isMounted) setSuggestedLines(history);
+                    } catch (e) { console.error("Failed to fetch vendor history:", e); }
+                }
             }
-        }).catch(console.error);
+        }).catch(e => console.error("Failed to fetch allocations:", e));
     }
-  }, [invoice.id, project?.id, invoice.ico, fileData.base64]); 
 
-  useEffect(() => {
-    if (fileData.extractionResult) {
-      setEditedResult(fileData.extractionResult);
-    }
-  }, [fileData]);
+    return () => { isMounted = false; }; // Cleanup on unmount or re-run
+  }, [invoice.id, project?.id, invoice.ico, invoice.status, fileData.base64]); // Depend only on stable IDs and status
 
-  if (!editedResult) return <div>Loading data...</div>;
+  if (!editedResult) return <div className="p-8 text-center text-slate-500">Loading invoice data...</div>;
 
   // Render-time calculation for UI feedback
   const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
@@ -88,8 +118,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setSaveStatus('idle'); // Reset status
     setErrorMessage(null);
     
-    // RECALCULATE STRICTLY INSIDE HANDLER
-    // This prevents using stale closure variables
+    // RECALCULATE STRICTLY INSIDE HANDLER to prevent stale closure variables
     const currentTotalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
     const currentInvoiceTotal = editedResult?.amountWithoutVat || 0;
     const currentUnallocated = currentInvoiceTotal - currentTotalAllocated;
@@ -100,7 +129,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
         // We allow a tiny tolerance (1.0) for rounding issues
         if (Math.abs(currentUnallocated) > 1.0) {
             setSaveStatus('error');
-            setErrorMessage(`Cannot approve: Unallocated amount is ${currentUnallocated.toFixed(2)}. It must be 0.`);
+            setErrorMessage(`Cannot approve: Unallocated amount is ${formatCurrency(currentUnallocated)}. It must be 0.`);
             return;
         }
     }
@@ -143,8 +172,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 
   const handleProducerAction = (action: 'approve' | 'reject') => {
       if (action === 'approve') {
-          // Direct approval without confirmation dialog
-          handleSave('final_approved');
+          handleSave('final_approved'); // Direct approval without confirmation dialog
       } else {
           setShowRejectModal(true);
       }
@@ -156,17 +184,27 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   }
 
   const handleDownloadStamp = async () => {
-      if (!project || !loadedFileContent) return;
+      if (!project || !loadedFileContent) {
+          alert("Document content is missing or loading.");
+          return;
+      }
       try {
+          // Generate PDF
           const stampedPdfBytes = await stampInvoicePdf(loadedFileContent, invoice, project, allocations);
+          
+          // Trigger Download
           const blob = new Blob([stampedPdfBytes], { type: 'application/pdf' });
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
-          link.download = `stamped_invoice_${invoice.internal_id}.pdf`;
+          link.download = `stamped_${invoice.internal_id || 'invoice'}.pdf`;
+          document.body.appendChild(link);
           link.click();
+          document.body.removeChild(link);
+          window.URL.revokeObjectURL(url);
       } catch (err: any) {
-          alert("Failed to generate stamped PDF: " + err.message);
+          console.error(err);
+          alert("Failed to generate stamped PDF. Ensure it is a valid PDF file.");
       }
   };
 

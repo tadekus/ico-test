@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
 import { FileData, Project, SavedInvoice, Budget } from '../types';
@@ -256,32 +255,36 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
       return 0;
   });
 
-  // Map SavedInvoice to FileData structure for InvoiceDetail
-  const mappedFileData: FileData | null = activeInvoice ? {
-      id: activeInvoice.id.toString(),
-      file: new File([], "Stored Invoice"), // Placeholder
-      type: 'pdf', 
-      status: 'saved',
-      base64: activeInvoice.file_content || undefined,
-      extractionResult: {
-          ico: activeInvoice.ico,
-          companyName: activeInvoice.company_name,
-          bankAccount: activeInvoice.bank_account,
-          iban: activeInvoice.iban,
-          amountWithVat: activeInvoice.amount_with_vat,
-          amountWithoutVat: activeInvoice.amount_without_vat,
-          currency: activeInvoice.currency,
-          variableSymbol: activeInvoice.variable_symbol,
-          description: activeInvoice.description,
-          confidence: activeInvoice.confidence,
-          rawText: activeInvoice.raw_text || undefined
-      }
-  } : null;
+  // Map SavedInvoice to FileData structure for InvoiceDetail (MEMOIZED)
+  const mappedFileData: FileData | null = useMemo(() => {
+      if (!activeInvoice) return null;
+      return {
+          id: activeInvoice.id.toString(),
+          file: new File([], "Stored Invoice"), // Placeholder
+          type: 'pdf', // Assuming pdf as default for existing, or detect from file_content?
+          status: 'saved',
+          base64: activeInvoice.file_content || undefined,
+          extractionResult: {
+              ico: activeInvoice.ico,
+              companyName: activeInvoice.company_name,
+              bankAccount: activeInvoice.bank_account,
+              iban: activeInvoice.iban,
+              amountWithVat: activeInvoice.amount_with_vat,
+              amountWithoutVat: activeInvoice.amount_without_vat,
+              currency: activeInvoice.currency,
+              variableSymbol: activeInvoice.variable_symbol,
+              description: activeInvoice.description,
+              confidence: activeInvoice.confidence,
+              rawText: activeInvoice.raw_text || undefined
+          }
+      };
+  }, [activeInvoice?.id, activeInvoice?.file_content]); // Depend on ID and content for stability
 
   // VIEW: DETAIL EDITOR
   if (viewingInvoiceId && activeInvoice && mappedFileData) {
       return (
           <InvoiceDetail 
+             key={activeInvoice.id} // FORCE REMOUNT ON SWITCH
              invoice={activeInvoice}
              fileData={mappedFileData}
              project={currentProject}
