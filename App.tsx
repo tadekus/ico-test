@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useCallback, Suspense, useRef } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase, getCurrentUser, getUserProfile, signOut, fetchProjects, fetchAssignedProjects, getProjectRole, isSupabaseConfigured, checkMyPendingInvitation } from './services/supabaseService';
 import { Profile, Project, ProjectRole, AppRole } from './types';
@@ -18,20 +17,17 @@ const App: React.FC = () => {
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [userRole, setUserRole] = useState<ProjectRole | AppRole | null>(null); // project-specific or app-wide
   const [activeModule, setActiveModule] = useState<'invoicing' | 'costReport' | 'admin' | 'approval'>('invoicing');
-  const [loading, setLoading] = useState(false); // General data loading
-  const [authLoading, setAuthLoading] = useState(true); // Specific for initial auth state
+  const [loading, setLoading] = useState(false); // General data loading (for profile/projects)
+  const [authLoading, setAuthLoading] = useState(true); // Specific for initial auth state check
   const [error, setError] = useState<string | null>(null);
   const [showSetupAccount, setShowSetupAccount] = useState(false);
   const [setupAccountEmail, setSetupAccountEmail] = useState<string | null>(null);
   const [initialInvoiceIdForCostReport, setInitialInvoiceIdForCostReport] = useState<number | null>(null);
 
-  // Ref to ensure initial auth check only dismisses authLoading once
-  const isFirstAuthCheckDone = useRef(false);
-
   // --- Auth State Change Listener (for *subsequent* changes) ---
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
-      // These errors are handled by the initial check, listener doesn't need to block
+      // Handled by the initial auth check below
       return; 
     }
 
@@ -42,7 +38,6 @@ const App: React.FC = () => {
         setSetupAccountEmail(session.user.email ?? null);
         try {
             const hasPendingInvitation = await checkMyPendingInvitation(session.user.email || '');
-            // Only show setup if user has an invitation AND they don't have a profile yet (checked in loadProfileAndProjects)
             setShowSetupAccount(hasPendingInvitation); 
         } catch (err) {
             console.error("Error checking pending invitation in listener:", err);
@@ -57,8 +52,7 @@ const App: React.FC = () => {
         setShowSetupAccount(false);
         setSetupAccountEmail(null);
       }
-      // CRITICAL: This listener NO LONGER sets authLoading.
-      // authLoading is managed by `checkInitialAuth` for initial load/refresh.
+      // authLoading is NOT managed by this listener. It's managed by the initial useEffect.
     });
 
     return () => {
@@ -66,24 +60,34 @@ const App: React.FC = () => {
     };
   }, [isSupabaseConfigured]); // Only depend on config, supabase is stable reference
 
+
   // --- Initial Auth Check (to populate currentUser on first load/refresh) ---
+  // This useEffect ensures authLoading is set false definitively after the initial check.
   useEffect(() => {
-    const checkInitialAuthSession = async () => {
+    let isMounted = true; // Flag to prevent state updates on unmounted components
+
+    const setupInitialAuth = async () => {
+      setAuthLoading(true); // Ensure spinner is active during this initial async op
+      setError(null); // Clear previous errors
+
       if (!isSupabaseConfigured) {
-        setError("Supabase is not configured. Please check your .env variables.");
-        setCurrentUser(null);
+        if (isMounted) setError("Supabase is not configured. Please check your .env variables.");
+        if (isMounted) setCurrentUser(null);
+        if (isMounted) setAuthLoading(false); // CRITICAL: Dismiss even on config error
         return;
       }
       if (!supabase) {
-        setError("Supabase client not initialized.");
-        setCurrentUser(null);
+        if (isMounted) setError("Supabase client not initialized.");
+        if (isMounted) setCurrentUser(null);
+        if (isMounted) setAuthLoading(false); // CRITICAL: Dismiss even on client init error
         return;
       }
 
-      setError(null); // Clear previous errors
       try {
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
+        if (!isMounted) return; // Prevent state update if component unmounted
+
         if (sessionError) {
           console.error("Error getting initial session:", sessionError);
           setError(sessionError.message || "Failed to retrieve session.");
@@ -91,40 +95,48 @@ const App: React.FC = () => {
         } else if (session?.user) {
           setCurrentUser(session.user);
           setSetupAccountEmail(session.user.email ?? null);
-          // Pending invitation check will run in the listener or loadProfileAndProjects
+          // Initial check for pending invitation
+          try {
+            const hasPendingInvitation = await checkMyPendingInvitation(session.user.email || '');
+            if (isMounted) setShowSetupAccount(hasPendingInvitation);
+          } catch (err) {
+            console.error("Error checking pending invitation during initial auth:", err);
+            if (isMounted) setShowSetupAccount(false); // Default to false if check fails
+          }
         } else {
           setCurrentUser(null);
+          if (isMounted) setShowSetupAccount(false); // No user, no setup account
         }
       } catch (err: any) {
         console.error("Critical error during initial authentication session retrieval:", err);
-        setError(err.message || "A critical error occurred during authentication initialization.");
-        setCurrentUser(null);
+        if (isMounted) {
+            setError(err.message || "A critical error occurred during authentication initialization.");
+            setCurrentUser(null);
+        }
+      } finally {
+        if (isMounted) {
+            setAuthLoading(false); // CRITICAL: ALWAYS dismiss authLoading when this initial check is done.
+            console.log("Initial auth check finished, authLoading dismissed.");
+        }
       }
     };
 
-    // Only run this once to get the initial session
-    if (!isFirstAuthCheckDone.current) {
-      checkInitialAuthSession();
-    }
-  }, [isSupabaseConfigured]); // Run only on initial mount or config changes
+    // Run this initial setup function once on component mount
+    setupInitialAuth();
 
-  // --- Effect to Dismiss authLoading AFTER currentUser is first determined ---
-  // This guarantees authLoading is set false once currentUser is non-null OR null for the first time
-  useEffect(() => {
-    if (!isFirstAuthCheckDone.current && (currentUser !== null || (currentUser === null && !authLoading))) {
-      // This condition ensures it fires *after* checkInitialAuthSession has had a chance to set currentUser
-      // or confirm it's null, and authLoading is still true or just finished.
-      setAuthLoading(false);
-      isFirstAuthCheckDone.current = true; // Mark as done forever
-      console.log("Auth loading dismissed.");
-    }
-  }, [currentUser, authLoading]); // Depend on currentUser to trigger once its initial state is known
+    // Cleanup function for useEffect to handle unmounting
+    return () => {
+        isMounted = false;
+    };
+  }, [isSupabaseConfigured]); // Re-run only if Supabase config changes (should be stable)
 
 
   // --- Load Profile & Projects (runs AFTER authLoading is false and currentUser is resolved) ---
   useEffect(() => {
+    let isMounted = true; // For cleanup
+
     const loadProfileAndProjects = async () => {
-      if (!currentUser) {
+      if (!currentUser || !isMounted) {
         setLoading(false); // No current user, nothing to load.
         setProfile(null);
         setProjects([]);
@@ -133,14 +145,15 @@ const App: React.FC = () => {
         return;
       }
 
-      // We explicitly check the profile here to determine if setup account is truly needed
-      // even if an invitation was pending.
       setLoading(true); // Start loading for profile/projects
       setError(null);
       try {
         const userProfile = await getUserProfile(currentUser.id);
         
+        if (!isMounted) return;
+
         // If no profile, or profile exists but full_name is missing, trigger setup account.
+        // This check is now the authoritative one for showing setupAccount AFTER auth is complete.
         if (!userProfile || !userProfile.full_name) {
           console.log("Profile missing or incomplete. Forcing setup account.");
           setShowSetupAccount(true);
@@ -149,7 +162,7 @@ const App: React.FC = () => {
           setProjects([]);
           setCurrentProject(null);
           setUserRole(null);
-          setLoading(false); 
+          // setLoading(false); -- Handled by finally block
           return;
         }
 
@@ -177,30 +190,34 @@ const App: React.FC = () => {
           setActiveModule('invoicing');
         }
         
-        setProjects(fetchedProjects);
+        if (isMounted) setProjects(fetchedProjects);
         
         if (fetchedProjects.length > 0) {
             const storedProjectId = localStorage.getItem('currentProjectId');
             const storedProject = storedProjectId ? fetchedProjects.find(p => p.id === parseInt(storedProjectId)) : null;
-            setCurrentProject(storedProject || fetchedProjects[0]);
+            if (isMounted) setCurrentProject(storedProject || fetchedProjects[0]);
         } else {
-            setCurrentProject(null);
+            if (isMounted) setCurrentProject(null);
         }
 
       } catch (err: any) {
         console.error("Error loading profile or projects:", err);
-        setError(err.message || "Failed to load user data. Please ensure database setup is complete.");
-        setProfile(null); // Clear profile on error
-        setProjects([]);
-        setCurrentProject(null);
-        setUserRole(null);
+        if (isMounted) {
+            setError(err.message || "Failed to load user data. Please ensure database setup is complete.");
+            setProfile(null); // Clear profile on error
+            setProjects([]);
+            setCurrentProject(null);
+            setUserRole(null);
+        }
       } finally {
-        setLoading(false); // IMPORTANT: Always dismiss loading spinner here
+        if (isMounted) {
+            setLoading(false); // IMPORTANT: Always dismiss main loading spinner here
+        }
       }
     };
 
     // Trigger profile/project loading only if currentUser is set, authLoading is false,
-    // AND we are not in the SetupAccount flow.
+    // AND we are not in the SetupAccount flow (showSetupAccount also means profile incomplete).
     if (currentUser && !authLoading && !showSetupAccount) {
       loadProfileAndProjects();
     } else if (!currentUser && !authLoading) { // If no current user AND authLoading is false, means we're truly logged out.
@@ -210,23 +227,35 @@ const App: React.FC = () => {
         setCurrentProject(null);
         setUserRole(null);
     }
+    
+    return () => { isMounted = false; }; // Cleanup on unmount
   }, [currentUser, authLoading, showSetupAccount]); // Depend on relevant state changes
 
   // --- Update Project Role based on Current Project ---
   useEffect(() => {
+    let isMounted = true; // For cleanup
     const updateProjectRole = async () => {
-      if (profile && currentProject && profile.app_role === 'user') {
+      if (!profile || !currentProject || profile.app_role === 'admin' || !isMounted) {
+        if (isMounted && profile?.app_role) {
+            setUserRole(profile.app_role); // Ensure admin role is set if no current project
+        }
+        return;
+      }
+
+      if (profile.app_role === 'user') { // Only for regular app users who might have project roles
         const role = await getProjectRole(profile.id, currentProject.id);
-        setUserRole(role);
-      } else if (profile && profile.app_role !== 'user') {
-          setUserRole(profile.app_role);
-      } else {
-        setUserRole(null);
+        if (isMounted) setUserRole(role);
+      } else { // For superusers, their app_role is their effective role
+          if (isMounted) setUserRole(profile.app_role);
       }
     };
     if (profile && currentProject && !loading) { // Only update if main loading is done
         updateProjectRole();
+    } else if (profile && !currentProject && !loading && profile.app_role) {
+        // If logged in, no project selected yet, set userRole to app_role
+        if (isMounted) setUserRole(profile.app_role);
     }
+    return () => { isMounted = false; };
   }, [profile, currentProject, loading]);
 
   // --- Handle Project Selection ---
@@ -264,7 +293,7 @@ const App: React.FC = () => {
     );
   }
 
-  // Primary Auth Loading Spinner
+  // Primary Auth Loading Spinner (for initial session check)
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -283,7 +312,7 @@ const App: React.FC = () => {
       return <SetupAccount email={setupAccountEmail} onSuccess={() => setShowSetupAccount(false)} />;
   }
 
-  // Secondary Loading for profile & project data, after auth is confirmed
+  // Secondary Loading for profile & project data, after auth is confirmed and profile is setup
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
