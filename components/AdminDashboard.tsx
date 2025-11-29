@@ -25,7 +25,8 @@ interface AdminDashboardProps {
   profile: Profile;
 }
 
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
+// Changed to a function declaration for better module interoperability.
+export default function AdminDashboard({ profile }: AdminDashboardProps) {
   // Data State
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [invitations, setInvitations] = useState<UserInvitation[]>([]);
@@ -185,7 +186,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
         const text = await file.text();
         await uploadBudget(selectedProjectId, file.name, text);
         setSuccessMsg(`Budget ${file.name} uploaded!`);
-        const updatedProjs = await fetchProjects();
+        const updatedProjs = await fetchProjects(); 
         setProjects(updatedProjs);
     } catch (err: any) {
         setError("Failed to upload: " + err.message);
@@ -206,8 +207,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
                   budgets: p.budgets?.map(b => ({ ...b, is_active: b.id === budgetId }))
               };
           }));
+          setSuccessMsg("Active budget updated.");
       } catch(err: any) {
-          alert(err.message);
+          console.error("Toggle Active Budget Error:", err);
+          alert("Error: " + err.message);
       }
   };
 
@@ -284,6 +287,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
       setActiveProjectForTeam(null);
       setProjectAssignments([]);
       setAssignUserId('');
+      setAssignUserRole('lineproducer'); // Reset to default
+      setError(null);
+      setSuccessMsg(null);
   };
   
   const handleAddAssignment = async () => {
@@ -292,410 +298,653 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ profile }) => {
           await addProjectAssignment(activeProjectForTeam.id, assignUserId, assignUserRole);
           const assignments = await fetchProjectAssignments(activeProjectForTeam.id);
           setProjectAssignments(assignments);
-          setAssignUserId('');
           const globalAssigns = await fetchAssignmentsForOwner(profile.id);
           setAllOwnerAssignments(globalAssigns);
+          setAssignUserId('');
+          setAssignUserRole('lineproducer');
+          setSuccessMsg("User assigned to project.");
       } catch (err: any) {
-          alert(err.message || "Failed to assign user");
+          console.error("Add Assignment Error:", err);
+          setError(err.message || "Failed to assign user");
       }
   };
   
   const handleRemoveAssignment = async (id: number) => {
        if(!activeProjectForTeam) return;
+       setError(null);
+       setSuccessMsg(null);
        try {
           await removeProjectAssignment(id);
           const assignments = await fetchProjectAssignments(activeProjectForTeam.id);
           setProjectAssignments(assignments);
           const globalAssigns = await fetchAssignmentsForOwner(profile.id);
           setAllOwnerAssignments(globalAssigns);
+          setSuccessMsg("User removed from project.");
       } catch (err: any) {
-          alert(err.message || "Failed to remove user");
+          console.error("Remove Assignment Error:", err);
+          setError(err.message || "Failed to remove user");
       }
   };
 
-  const getUserRolesText = (userId: string) => {
-    const userAssigns = allOwnerAssignments.filter(a => a.user_id === userId);
-    if (userAssigns.length === 0) return "Unassigned";
-    if (userAssigns.length === 1) {
-        return `${formatRoleName(userAssigns[0].role)} (${userAssigns[0].project?.name})`;
-    }
-    return `${userAssigns.length} Active Roles`;
-  };
-
+  // Helper to format role names for display
   const formatRoleName = (role: string) => {
       switch(role) {
           case 'lineproducer': return 'Line Producer';
           case 'producer': return 'Producer';
           case 'accountant': return 'Accountant';
+          case 'admin': return 'Administrator'; // For system-level roles
+          case 'superuser': return 'Superuser'; // For system-level roles
           default: return role;
       }
   };
 
-  const getAssignedUsersForProject = (projectId: number) => {
-      const assignedIds = allOwnerAssignments.filter(a => a.project_id === projectId).map(a => a.user_id);
-      return profiles.filter(p => assignedIds.includes(p.id));
+  // Get users who are either invited by this owner OR assigned to their projects
+  // This ensures Superuser's 'My Team' tab only shows relevant profiles.
+  const getRelevantTeamProfiles = () => {
+      const invitedProfiles = profiles.filter(p => p.invited_by === profile.id);
+      const assignedUserIdsInOwnerProjects = new Set(
+          allOwnerAssignments.filter(a => a.project?.created_by === profile.id).map(a => a.user_id)
+      );
+      
+      const uniqueUserIds = Array.from(new Set([...invitedProfiles.map(p => p.id), ...assignedUserIdsInOwnerProjects]));
+      
+      return profiles.filter(p => uniqueUserIds.includes(p.id));
+  };
+  
+  // Get all assignments for a specific user to display in "My Team" tab
+  const getUserAssignmentsDisplay = (userId: string) => {
+    const userAssigns = allOwnerAssignments.filter(a => a.user_id === userId);
+    if (userAssigns.length === 0) return "Unassigned";
+    
+    return userAssigns.map(a => 
+      <span key={a.id} className="inline-flex items-center gap-1 text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 font-bold uppercase mr-1 mb-1">
+        {formatRoleName(a.role)} {a.project?.name ? `(${a.project.name})` : ''}
+      </span>
+    );
   };
 
+
+  // --- V36 SQL MIGRATION SCRIPT ---
   const getMigrationSql = () => `
--- === V34 OPTIMIZATION: CACHED RLS POLICIES ===
--- Optimizes RLS by wrapping auth.uid() in a subquery to allow Postgres to cache the result per transaction
--- instead of re-evaluating it for every single row.
+-- === V36 MIGRATION: INVOICE ALLOCATION SUMMARY & RLS OPTIMIZATION ===
+-- Adds total_allocated_amount and has_allocations columns to 'invoices' table.
+-- Creates a trigger to automatically update these fields when 'invoice_allocations' change.
+-- Optimizes RLS policies for better performance and fixes foreign key cascades.
 
--- 1. Optimize INVOICES policies
-DROP POLICY IF EXISTS "Users manage own invoices" ON invoices;
-CREATE POLICY "Users manage own invoices" ON invoices FOR ALL TO authenticated
-USING ( (select auth.uid()) = user_id )
-WITH CHECK ( (select auth.uid()) = user_id );
+-- 1. AGGRESSIVE CLEANUP OF OLD POLICIES AND FUNCTIONS
+DO $$
+DECLARE
+    r RECORD;
+BEGIN
+    -- Drop all policies from relevant tables (dynamic discovery)
+    FOR r IN (
+        SELECT policyname, tablename
+        FROM pg_policies
+        WHERE schemaname = 'public' AND tablename IN ('profiles', 'projects', 'budgets', 'budget_lines', 'project_assignments', 'user_invitations', 'invoices', 'invoice_allocations')
+    )
+    LOOP
+        EXECUTE 'DROP POLICY IF EXISTS "' || r.policyname || '" ON public.' || r.tablename || ';';
+        RAISE NOTICE 'Dropped policy: % on %', r.policyname, r.tablename;
+    END LOOP;
 
-DROP POLICY IF EXISTS "Team Read Invoices" ON invoices;
-CREATE POLICY "Team Read Invoices" ON invoices FOR SELECT TO authenticated
+    -- Drop all functions (CASCADE to remove dependencies cleanly)
+    DROP FUNCTION IF EXISTS claim_invited_role(text) CASCADE;
+    DROP FUNCTION IF EXISTS get_my_app_role_safe() CASCADE;
+    DROP FUNCTION IF EXISTS is_admin() CASCADE;
+    DROP FUNCTION IF EXISTS is_superuser_app() CASCADE;
+    DROP FUNCTION IF EXISTS is_user_project_member(uuid, bigint) CASCADE;
+    DROP FUNCTION IF EXISTS is_current_user_invoice_project_member(bigint) CASCADE;
+    DROP FUNCTION IF EXISTS admin_reset_user_password(uuid, text) CASCADE;
+    DROP FUNCTION IF EXISTS superuser_reset_password(uuid, text) CASCADE;
+    DROP FUNCTION IF EXISTS delete_team_member(uuid) CASCADE;
+    DROP FUNCTION IF EXISTS update_invoice_allocation_summary() CASCADE;
+    DROP FUNCTION IF EXISTS get_my_role_safe() CASCADE; -- Old function name
+    DROP FUNCTION IF EXISTS get_my_team_mates() CASCADE; -- Old function name
+    DROP FUNCTION IF EXISTS is_project_member(bigint) CASCADE; -- Old function name
+    DROP FUNCTION IF EXISTS is_project_owner(bigint) CASCADE; -- Old function name
+    DROP FUNCTION IF EXISTS get_profile_role(uuid) CASCADE; -- Old function name
+    DROP FUNCTION IF EXISTS check_email_exists_global(text) CASCADE;
+    
+    RAISE NOTICE 'Cleaned up all old policies and functions.';
+END $$;
+
+
+-- 2. CREATE ENUM (Safely)
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'project_role') THEN
+        CREATE TYPE project_role AS ENUM ('lineproducer', 'producer', 'accountant');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'app_role') THEN
+        CREATE TYPE app_role AS ENUM ('admin', 'superuser', 'user');
+    END IF;
+END $$;
+
+
+-- 3. CREATE/UPDATE TABLE SCHEMAS (Safely and Idempotently with ON DELETE CASCADE/SET NULL)
+
+-- profiles table
+CREATE TABLE IF NOT EXISTS profiles (
+  id uuid references auth.users on delete cascade primary key,
+  email text NOT NULL,
+  full_name text,
+  app_role app_role DEFAULT 'user' NOT NULL, -- New column for proper RBAC
+  is_disabled boolean DEFAULT FALSE NOT NULL,
+  invited_by uuid references auth.users ON DELETE SET NULL, -- Who invited this user
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+-- Ensure columns exist and have correct defaults/constraints
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS full_name text;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS app_role app_role DEFAULT 'user' NOT NULL;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_disabled boolean DEFAULT FALSE NOT NULL;
+-- Ensure FK constraint for invited_by (handled by drop/add below)
+
+
+-- projects table
+CREATE TABLE IF NOT EXISTS projects (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  name text NOT NULL,
+  description text,
+  company_name text,
+  ico text,
+  currency text DEFAULT 'CZK' NOT NULL,
+  created_by uuid REFERENCES auth.users ON DELETE SET NULL, -- Project owner
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS description text;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS company_name text;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS ico text;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS currency text DEFAULT 'CZK' NOT NULL;
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS created_by uuid REFERENCES auth.users ON DELETE SET NULL;
+
+
+-- budgets table
+CREATE TABLE IF NOT EXISTS budgets (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  project_id bigint REFERENCES projects ON DELETE CASCADE NOT NULL,
+  version_name text,
+  xml_content text,
+  is_active boolean DEFAULT FALSE NOT NULL,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT FALSE NOT NULL;
+
+
+-- budget_lines table
+CREATE TABLE IF NOT EXISTS budget_lines (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  budget_id bigint REFERENCES budgets ON DELETE CASCADE NOT NULL,
+  account_number text NOT NULL,
+  account_description text,
+  category_number text,
+  category_description text,
+  original_amount numeric NOT NULL,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+
+-- project_assignments table
+CREATE TABLE IF NOT EXISTS project_assignments (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  project_id bigint REFERENCES projects ON DELETE CASCADE NOT NULL,
+  user_id uuid REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
+  role project_role NOT NULL,
+  UNIQUE(project_id, user_id)
+);
+
+
+-- user_invitations table
+CREATE TABLE IF NOT EXISTS user_invitations (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  email text NOT NULL,
+  invited_by uuid REFERENCES auth.users ON DELETE SET NULL,
+  status text DEFAULT 'pending' NOT NULL, -- 'pending', 'accepted', 'rejected'
+  target_app_role app_role, -- For system-level invites (admin, superuser)
+  target_role project_role, -- For project-level invites (lineproducer, producer, accountant)
+  target_project_id bigint REFERENCES projects(id) ON DELETE SET NULL,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS status text DEFAULT 'pending' NOT NULL;
+ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_app_role app_role;
+ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_role project_role;
+ALTER TABLE user_invitations ADD COLUMN IF NOT EXISTS target_project_id bigint REFERENCES projects(id) ON DELETE SET NULL;
+
+
+-- invoices table
+CREATE TABLE IF NOT EXISTS invoices (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+  user_id uuid REFERENCES auth.users ON DELETE SET NULL NOT NULL, -- Uploader of the invoice
+  project_id bigint REFERENCES projects(id) ON DELETE SET NULL, -- Linked project
+  internal_id bigint, -- Project specific sequence number (1, 2, 3...)
+  ico text,
+  company_name text,
+  bank_account text,
+  iban text,
+  variable_symbol text,
+  description text,
+  amount_with_vat numeric,
+  amount_without_vat numeric,
+  currency text,
+  confidence float,
+  raw_text text,
+  status text DEFAULT 'draft' NOT NULL, -- 'draft', 'approved', 'final_approved', 'rejected'
+  rejection_reason text,
+  file_content text, -- Base64 content for preview
+  
+  -- New fields for allocation summary (updated by trigger)
+  total_allocated_amount numeric DEFAULT 0 NOT NULL,
+  has_allocations boolean DEFAULT FALSE NOT NULL
+);
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS internal_id bigint;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS variable_symbol text;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS description text;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS status text DEFAULT 'draft' NOT NULL;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS rejection_reason text;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS file_content text;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS total_allocated_amount numeric DEFAULT 0 NOT NULL;
+ALTER TABLE invoices ADD COLUMN IF NOT EXISTS has_allocations boolean DEFAULT FALSE NOT NULL;
+ALTER TABLE invoices ALTER COLUMN status SET DEFAULT 'draft'; -- Ensure default for existing rows
+
+
+-- invoice_allocations table
+CREATE TABLE IF NOT EXISTS invoice_allocations (
+  id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+  invoice_id bigint REFERENCES invoices ON DELETE CASCADE NOT NULL,
+  budget_line_id bigint REFERENCES budget_lines ON DELETE CASCADE NOT NULL,
+  amount numeric NOT NULL,
+  created_at timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+
+-- 4. FIX FOREIGN KEY CASCADES (Crucial for user deletion)
+-- Drop old FKs and re-add with ON DELETE CASCADE/SET NULL where appropriate
+DO $$ BEGIN
+    -- profiles.invited_by
+    ALTER TABLE profiles DROP CONSTRAINT IF EXISTS profiles_invited_by_fkey;
+    ALTER TABLE profiles ADD CONSTRAINT profiles_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+    
+    -- invoices.user_id
+    ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_user_id_fkey;
+    ALTER TABLE invoices ADD CONSTRAINT invoices_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+    -- invoices.project_id
+    ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_project_id_fkey;
+    ALTER TABLE invoices ADD CONSTRAINT invoices_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
+
+    RAISE NOTICE 'Fixed Foreign Key constraints for cascades.';
+END $$;
+
+
+-- 5. DATA CLEANUP & MIGRATION (Idempotent)
+DO $$ BEGIN
+    -- Ensure app_role is set for existing profiles
+    UPDATE profiles SET app_role = 'admin' WHERE lower(email) = 'tadekus@gmail.com' AND app_role IS DISTINCT FROM 'admin';
+    UPDATE profiles SET app_role = 'superuser' WHERE is_superuser = TRUE AND app_role IS DISTINCT FROM 'superuser';
+    UPDATE profiles SET app_role = 'user' WHERE app_role IS NULL;
+
+    -- Clean existing IČO data in invoices (strip non-digits)
+    UPDATE invoices SET ico = REGEXP_REPLACE(ico, '[^0-9]', '', 'g') WHERE ico IS NOT NULL AND ico ~ '[^0-9]';
+    -- Clean existing variable_symbol data in invoices (strip spaces)
+    UPDATE invoices SET variable_symbol = REPLACE(variable_symbol, ' ', '') WHERE variable_symbol IS NOT NULL AND variable_symbol LIKE '% %';
+    RAISE NOTICE 'Cleaned up ICO and Variable Symbol data in invoices and set app_roles.';
+END $$;
+
+
+-- 6. CREATE OPTIMIZED RLS HELPER FUNCTIONS (SECURITY DEFINER)
+-- These functions run with 'postgres' privileges, bypassing RLS to safely check roles/memberships
+
+-- Get current user's app_role safely
+CREATE OR REPLACE FUNCTION get_my_app_role_safe()
+RETURNS app_role LANGUAGE plpgsql SECURITY DEFINER AS $$
+  DECLARE
+    user_app_role app_role;
+  BEGIN
+    SELECT p.app_role INTO user_app_role FROM public.profiles p WHERE p.id = (select auth.uid());
+    RETURN COALESCE(user_app_role, 'user'); -- Default to 'user' if profile not found
+  END;
+$$;
+ALTER FUNCTION get_my_app_role_safe() OWNER TO postgres;
+
+-- Check if current user is an 'admin'
+CREATE OR REPLACE FUNCTION is_admin()
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER AS $$
+  BEGIN
+    RETURN (SELECT get_my_app_role_safe()) = 'admin';
+  END;
+$$;
+ALTER FUNCTION is_admin() OWNER TO postgres;
+
+-- Check if current user is a 'superuser' or 'admin'
+CREATE OR REPLACE FUNCTION is_superuser_app()
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER AS $$
+  BEGIN
+    RETURN (SELECT get_my_app_role_safe()) = 'superuser' OR (SELECT is_admin());
+  END;
+$$;
+ALTER FUNCTION is_superuser_app() OWNER TO postgres;
+
+-- Check if a user is a member of a specific project (bypasses RLS on profiles for lookup)
+CREATE OR REPLACE FUNCTION is_user_project_member(p_user_id uuid, p_project_id bigint)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1 FROM public.project_assignments
+        WHERE user_id = p_user_id AND project_id = p_project_id
+    );
+END;
+$$;
+ALTER FUNCTION is_user_project_member(uuid, bigint) OWNER TO postgres;
+
+-- Check if current user is member of an invoice's project
+CREATE OR REPLACE FUNCTION is_current_user_invoice_project_member(p_invoice_id bigint)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+    v_project_id bigint;
+BEGIN
+    SELECT project_id INTO v_project_id FROM public.invoices WHERE id = p_invoice_id;
+    RETURN (SELECT is_user_project_member((select auth.uid()), v_project_id));
+END;
+$$;
+ALTER FUNCTION is_current_user_invoice_project_member(bigint) OWNER TO postgres;
+
+-- Function to check if an email exists globally in auth.users or pending invitations
+CREATE OR REPLACE FUNCTION check_email_exists_global(target_email text)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  SET search_path = public, auth;
+  RETURN EXISTS (SELECT 1 FROM auth.users WHERE lower(email) = lower(target_email))
+         OR EXISTS (SELECT 1 FROM public.user_invitations WHERE lower(email) = lower(target_email) AND status = 'pending');
+END;
+$$;
+ALTER FUNCTION check_email_exists_global(text) OWNER TO postgres;
+
+-- Function for Admin to reset any password (super-privileges)
+CREATE OR REPLACE FUNCTION admin_reset_user_password(target_user_id uuid, new_password text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    SET search_path = public, auth, extensions;
+    IF (SELECT is_admin()) THEN
+        UPDATE auth.users
+        SET encrypted_password = extensions.crypt(new_password, extensions.gen_salt('bf'))
+        WHERE id = target_user_id;
+    ELSE
+        RAISE EXCEPTION 'Permission denied: Only administrators can reset any user password.';
+    END IF;
+END;
+$$;
+ALTER FUNCTION admin_reset_user_password(uuid, text) OWNER TO postgres;
+
+-- Function for Superuser to reset passwords of users they invited
+CREATE OR REPLACE FUNCTION superuser_reset_password(target_user_id uuid, new_password text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    SET search_path = public, auth, extensions;
+    IF (SELECT is_superuser_app()) AND EXISTS (SELECT 1 FROM public.profiles WHERE id = target_user_id AND invited_by = (select auth.uid())) THEN
+        UPDATE auth.users
+        SET encrypted_password = extensions.crypt(new_password, extensions.gen_salt('bf'))
+        WHERE id = target_user_id;
+    ELSE
+        RAISE EXCEPTION 'Permission denied: You can only reset passwords for users you have invited.';
+    END IF;
+END;
+$$;
+ALTER FUNCTION superuser_reset_password(uuid, text) OWNER TO postgres;
+
+-- Function to update profile and claim role for invited users (SECURITY DEFINER for bypass)
+CREATE OR REPLACE FUNCTION claim_invited_role(p_full_name text)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  inv_record record;
+  current_email text;
+  profile_id uuid := (select auth.uid());
+  user_app_role app_role := 'user'; -- Default if no invite or not admin/superuser
+  user_project_role project_role := NULL;
+  user_project_id bigint := NULL;
+BEGIN
+  SET search_path = public, auth;
+  
+  SELECT lower(email) INTO current_email FROM auth.users WHERE id = profile_id;
+  
+  -- Find the Pending Invitation
+  SELECT * FROM public.user_invitations 
+  WHERE lower(email) = current_email AND status = 'pending'
+  LIMIT 1 INTO inv_record;
+
+  IF inv_record.id IS NOT NULL THEN
+    -- Determine roles from invitation
+    user_app_role := COALESCE(inv_record.target_app_role, 'user');
+    user_project_role := inv_record.target_role;
+    user_project_id := inv_record.target_project_id;
+
+    -- Update the profile directly (bypasses RLS due to SECURITY DEFINER)
+    UPDATE public.profiles 
+    SET 
+        full_name = p_full_name, 
+        app_role = user_app_role, 
+        invited_by = inv_record.invited_by 
+    WHERE id = profile_id;
+
+    -- If it's a project team member, assign to project
+    IF user_project_role IS NOT NULL AND user_project_id IS NOT NULL THEN
+        BEGIN
+            INSERT INTO public.project_assignments (project_id, user_id, role)
+            VALUES (user_project_id, profile_id, user_project_role::project_role) 
+            ON CONFLICT (project_id, user_id) DO NOTHING;
+        EXCEPTION
+            WHEN OTHERS THEN
+                RAISE WARNING 'Failed to auto-assign user % to project % with role %: %', profile_id, user_project_id, user_project_role, SQLERRM;
+        END;
+    END IF;
+
+    -- Mark invite as used
+    UPDATE public.user_invitations SET status = 'accepted' WHERE id = inv_record.id;
+    RETURN 'Account Setup Complete: Role ' || user_app_role || ' / ' || coalesce(user_project_role::text, 'N/A');
+  ELSE
+    -- If no invite, just update name for existing profile (should only happen for manual signups)
+    UPDATE public.profiles SET full_name = p_full_name WHERE id = profile_id;
+    RETURN 'No pending invitation found, name updated.';
+  END IF;
+END;
+$$;
+ALTER FUNCTION claim_invited_role(text) OWNER TO postgres;
+
+-- Function to delete user (from auth.users which cascades to profiles, assignments etc)
+CREATE OR REPLACE FUNCTION delete_team_member(target_user_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+    -- Check if the current user is an admin or is the inviter of the target_user_id
+    IF (SELECT is_admin()) OR (
+        SELECT p.invited_by FROM public.profiles p WHERE p.id = target_user_id
+    ) = (select auth.uid()) THEN
+        -- Delete from auth.users, which should cascade to profiles, assignments, etc.
+        DELETE FROM auth.users WHERE id = target_user_id;
+    ELSE
+        RAISE EXCEPTION 'Permission denied: Not an admin or not the inviter of this user.';
+    END IF;
+END;
+$$;
+ALTER FUNCTION delete_team_member(uuid) OWNER TO postgres;
+
+
+-- 7. CREATE TRIGGER FUNCTION FOR INVOICE ALLOCATION SUMMARY
+CREATE OR REPLACE FUNCTION update_invoice_allocation_summary()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+    v_total_allocated NUMERIC;
+    v_has_allocations BOOLEAN;
+    target_invoice_id BIGINT;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        target_invoice_id := OLD.invoice_id;
+    ELSIF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+        target_invoice_id := NEW.invoice_id;
+    END IF;
+
+    -- Calculate current summary for the affected invoice_id
+    SELECT 
+        COALESCE(SUM(amount), 0),
+        COUNT(*) > 0
+    INTO 
+        v_total_allocated, 
+        v_has_allocations
+    FROM public.invoice_allocations 
+    WHERE invoice_id = target_invoice_id;
+    
+    -- Update the parent invoice
+    UPDATE public.invoices
+    SET 
+        total_allocated_amount = v_total_allocated,
+        has_allocations = v_has_allocations
+    WHERE id = target_invoice_id;
+    
+    -- AFTER triggers usually return NEW or OLD, or NULL
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    ELSE
+        RETURN NEW;
+    END IF;
+END;
+$$;
+ALTER FUNCTION update_invoice_allocation_summary() OWNER TO postgres;
+
+-- Trigger to call the summary function on INSERT, UPDATE, DELETE of invoice_allocations
+CREATE TRIGGER tr_update_invoice_allocation_summary
+AFTER INSERT OR UPDATE OR DELETE ON invoice_allocations
+FOR EACH ROW EXECUTE FUNCTION update_invoice_allocation_summary();
+
+
+-- 8. RLS POLICIES (Updated and Optimized for V36)
+-- Use (select auth.uid()) pattern for caching and explicit function calls for role checks
+
+-- --- PROFILES ---
+CREATE POLICY "Profiles Admin Full" ON profiles FOR ALL TO authenticated USING ( (select is_admin()) );
+CREATE POLICY "Profiles View Self and Invites" ON profiles FOR SELECT TO authenticated
 USING ( 
-  EXISTS (
-    SELECT 1 FROM project_assignments 
-    WHERE user_id = (select auth.uid()) AND project_id = invoices.project_id
-  ) 
+    id = (select auth.uid()) 
+    OR invited_by = (select auth.uid()) 
+    OR (select is_admin())
+    OR EXISTS (SELECT 1 FROM project_assignments pa WHERE pa.user_id = (select auth.uid()) AND pa.project_id IN (SELECT p.project_id FROM project_assignments p WHERE p.user_id = profiles.id))
+);
+CREATE POLICY "Profiles Update Self" ON profiles FOR UPDATE TO authenticated USING ( id = (select auth.uid()) );
+
+
+-- --- PROJECTS ---
+CREATE POLICY "Projects Admin Full" ON projects FOR ALL TO authenticated USING ( (select is_admin()) );
+CREATE POLICY "Projects Owners Full" ON projects FOR ALL TO authenticated USING ( created_by = (select auth.uid()) );
+CREATE POLICY "Projects Team Read" ON projects FOR SELECT TO authenticated USING ( 
+    (select is_user_project_member((select auth.uid()), id))
+    OR (select is_superuser_app()) 
 );
 
-DROP POLICY IF EXISTS "Invoices Write" ON invoices;
-DROP POLICY IF EXISTS "Invoices Update" ON invoices;
-CREATE POLICY "Invoices Update" ON invoices FOR UPDATE TO authenticated
+
+-- --- BUDGETS ---
+CREATE POLICY "Budgets Admin Full" ON budgets FOR ALL TO authenticated USING ( (select is_admin()) );
+CREATE POLICY "Budgets Owners Full" ON budgets FOR ALL TO authenticated USING ( 
+    EXISTS (SELECT 1 FROM projects WHERE id = budgets.project_id AND created_by = (select auth.uid()))
+);
+CREATE POLICY "Budgets Team Read" ON budgets FOR SELECT TO authenticated USING ( 
+    EXISTS (SELECT 1 FROM project_assignments WHERE project_id = budgets.project_id AND user_id = (select auth.uid())) 
+);
+CREATE POLICY "Budgets Team Write" ON budgets FOR ALL TO authenticated -- Superusers, LPs, Producers can manage budgets
+USING ( 
+    EXISTS (SELECT 1 FROM project_assignments WHERE project_id = budgets.project_id AND user_id = (select auth.uid()))
+    OR EXISTS (SELECT 1 FROM projects WHERE id = budgets.project_id AND created_by = (select auth.uid()))
+);
+
+
+-- --- BUDGET_LINES ---
+CREATE POLICY "Budget Lines Admin Full" ON budget_lines FOR ALL TO authenticated USING ( (select is_admin()) );
+CREATE POLICY "Budget Lines Owners Full" ON budget_lines FOR ALL TO authenticated USING ( 
+    EXISTS (SELECT 1 FROM budgets b JOIN projects p ON b.project_id = p.id WHERE b.id = budget_lines.budget_id AND p.created_by = (select auth.uid()))
+);
+CREATE POLICY "Budget Lines Team Read" ON budget_lines FOR SELECT TO authenticated USING ( 
+    EXISTS (SELECT 1 FROM budgets b JOIN project_assignments pa ON b.project_id = pa.project_id WHERE b.id = budget_lines.budget_id AND pa.user_id = (select auth.uid()))
+);
+CREATE POLICY "Budget Lines Team Write" ON budget_lines FOR ALL TO authenticated -- Superusers, LPs, Producers can manage budget lines
 USING (
-  EXISTS (
-    SELECT 1 FROM project_assignments
-    WHERE user_id = (select auth.uid()) AND project_id = invoices.project_id
-  )
+    EXISTS (SELECT 1 FROM budgets b JOIN project_assignments pa ON b.project_id = pa.project_id WHERE b.id = budget_lines.budget_id AND pa.user_id = (select auth.uid()))
+    OR EXISTS (SELECT 1 FROM budgets b JOIN projects p ON b.project_id = p.id WHERE b.id = budget_lines.budget_id AND p.created_by = (select auth.uid()))
 );
 
-DROP POLICY IF EXISTS "Invoices Insert" ON invoices;
-DROP POLICY IF EXISTS "Team Insert Invoices" ON invoices;
-CREATE POLICY "Team Insert Invoices" ON invoices FOR INSERT TO authenticated
-WITH CHECK (
-  EXISTS (
-    SELECT 1 FROM project_assignments
-    WHERE user_id = (select auth.uid()) AND project_id = invoices.project_id
-  )
+
+-- --- PROJECT_ASSIGNMENTS ---
+CREATE POLICY "Assignments Admin Full" ON project_assignments FOR ALL TO authenticated USING ( (select is_admin()) );
+CREATE POLICY "Assignments Owner Manage" ON project_assignments FOR ALL TO authenticated USING ( 
+    EXISTS (SELECT 1 FROM projects WHERE id = project_assignments.project_id AND created_by = (select auth.uid()))
+);
+CREATE POLICY "Assignments Read Self" ON project_assignments FOR SELECT TO authenticated USING ( user_id = (select auth.uid()) );
+
+
+-- --- USER_INVITATIONS ---
+CREATE POLICY "Invitations Admin Full" ON user_invitations FOR ALL TO authenticated USING ( (select is_admin()) );
+CREATE POLICY "Invitations Owner Manage" ON user_invitations FOR ALL TO authenticated USING ( invited_by = (select auth.uid()) );
+CREATE POLICY "Invitations Read Self" ON user_invitations FOR SELECT TO authenticated USING ( lower(email) = lower((select auth.jwt() ->> 'email')) );
+
+
+-- --- INVOICES ---
+CREATE POLICY "Invoices Admin Full" ON invoices FOR ALL TO authenticated USING ( (select is_admin()) );
+-- Team members can read ALL invoices in their assigned projects
+CREATE POLICY "Invoices Team Read" ON invoices FOR SELECT TO authenticated USING ( (select is_current_user_invoice_project_member(id)) );
+-- Line Producers can create/update their own invoices if they are part of the project
+CREATE POLICY "Invoices Line Producer Manage" ON invoices FOR ALL TO authenticated -- INSERT, UPDATE, DELETE
+USING ( 
+    (select is_user_project_member((select auth.uid()), project_id)) AND (select get_my_app_role_safe()) = 'user'
+) WITH CHECK (
+    (select is_user_project_member((select auth.uid()), project_id)) AND (select get_my_app_role_safe()) = 'user' 
+    AND status IN ('draft', 'rejected') -- Can only manage drafts or rejected, not approved/final_approved
+);
+-- Producers can update status and rejection reason for pending invoices
+CREATE POLICY "Invoices Producer Update Status" ON invoices FOR UPDATE TO authenticated USING (
+    (select is_user_project_member((select auth.uid()), project_id)) 
+    AND (select get_my_app_role_safe()) = 'user' -- For role check
+    AND old.status = 'approved' -- Only invoices waiting for approval
+) WITH CHECK (
+    -- Producer can ONLY change status or rejection_reason
+    (status IN ('final_approved', 'rejected') AND (total_allocated_amount IS NOT DISTINCT FROM old.total_allocated_amount) AND (has_allocations IS NOT DISTINCT FROM old.has_allocations) AND (company_name IS NOT DISTINCT FROM old.company_name) AND (ico IS NOT DISTINCT FROM old.ico) AND (variable_symbol IS NOT DISTINCT FROM old.variable_symbol) AND (description IS NOT DISTINCT FROM old.description) AND (amount_without_vat IS NOT DISTINCT FROM old.amount_without_vat) AND (amount_with_vat IS NOT DISTINCT FROM old.amount_with_vat) AND (bank_account IS NOT DISTINCT FROM old.bank_account) AND (iban IS NOT DISTINCT FROM old.iban) AND (currency IS NOT DISTINCT FROM old.currency))
 );
 
--- 2. Optimize ALLOCATIONS policies
-DROP POLICY IF EXISTS "Team Read Allocations" ON invoice_allocations;
-CREATE POLICY "Team Read Allocations" ON invoice_allocations FOR SELECT TO authenticated
+
+-- --- INVOICE_ALLOCATIONS ---
+CREATE POLICY "Allocations Admin Full" ON invoice_allocations FOR ALL TO authenticated USING ( (select is_admin()) );
+CREATE POLICY "Allocations Team Read" ON invoice_allocations FOR SELECT TO authenticated USING ( 
+    EXISTS (SELECT 1 FROM invoices WHERE id = invoice_allocations.invoice_id AND (select is_current_user_invoice_project_member(invoices.id)))
+);
+CREATE POLICY "Allocations Line Producer Manage" ON invoice_allocations FOR ALL TO authenticated -- INSERT, UPDATE, DELETE
 USING (
-  EXISTS (
-    SELECT 1 FROM invoices
-    JOIN project_assignments ON project_assignments.project_id = invoices.project_id
-    WHERE invoices.id = invoice_allocations.invoice_id
-    AND project_assignments.user_id = (select auth.uid())
-  )
+    EXISTS (SELECT 1 FROM invoices WHERE id = invoice_allocations.invoice_id AND (select get_my_app_role_safe()) = 'user' AND invoices.status IN ('draft', 'rejected') AND (select is_current_user_invoice_project_member(invoices.id)))
 );
 
-DROP POLICY IF EXISTS "Team Write Allocations" ON invoice_allocations;
-CREATE POLICY "Team Write Allocations" ON invoice_allocations FOR ALL TO authenticated
-USING (
-  EXISTS (
-    SELECT 1 FROM invoices
-    JOIN project_assignments ON project_assignments.project_id = invoices.project_id
-    WHERE invoices.id = invoice_allocations.invoice_id
-    AND project_assignments.user_id = (select auth.uid())
-  )
-);
 
--- 3. Optimize BUDGET LINES policies
-DROP POLICY IF EXISTS "Team Read Budget Lines" ON budget_lines;
-CREATE POLICY "Team Read Budget Lines" ON budget_lines FOR SELECT TO authenticated
-USING (
-  EXISTS (
-    SELECT 1 FROM budgets
-    JOIN project_assignments ON project_assignments.project_id = budgets.project_id
-    WHERE budgets.id = budget_lines.budget_id
-    AND project_assignments.user_id = (select auth.uid())
-  )
-);
+-- 9. CREATE DATABASE INDEXES (for performance)
+CREATE INDEX IF NOT EXISTS idx_invoices_project_id_internal_id ON invoices (project_id, internal_id DESC);
+CREATE INDEX IF NOT EXISTS idx_budget_lines_budget_id ON budget_lines (budget_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_allocations_invoice_id ON invoice_allocations (invoice_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_allocations_budget_line_id ON invoice_allocations (budget_line_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_ico ON invoices (ico);
+CREATE INDEX IF NOT EXISTS idx_invoices_variable_symbol ON invoices (variable_symbol);
+CREATE INDEX IF NOT EXISTS idx_profiles_invited_by ON profiles (invited_by);
+CREATE INDEX IF NOT EXISTS idx_project_assignments_user_project ON project_assignments (user_id, project_id);
 
--- 4. Re-Apply Indexes (Just in case they were missed in V33)
-DROP INDEX IF EXISTS idx_invoices_project_internal;
-CREATE INDEX IF NOT EXISTS idx_invoices_project_internal ON invoices (project_id, internal_id DESC);
-`;
 
-  const pendingSystemInvites = invitations.filter(inv => inv.target_app_role === 'admin' || inv.target_app_role === 'superuser');
+-- 10. INITIAL DATA MIGRATION/SETUP (Idempotent for tadekus@gmail.com)
+-- This runs once to ensure the master admin profile and initial extension are set up.
+DO $$ BEGIN
+    -- Ensure pgcrypto extension is enabled for password hashing functions
+    CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+    
+    -- Ensure master admin profile exists and has correct role
+    INSERT INTO public.profiles (id, email, full_name, app_role)
+    VALUES (
+        (SELECT id FROM auth.users WHERE lower(email) = 'tadekus@gmail.com'),
+        'tadekus@gmail.com',
+        'Master Administrator',
+        'admin'
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        email = EXCLUDED.email,
+        full_name = EXCLUDED.full_name,
+        app_role = EXCLUDED.app_role;
 
-  if (loading) return <div className="p-12 text-center"><div className="animate-spin inline-block w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>;
-
-  return (
-    <div className="space-y-6 pb-12">
-      {isGhostAdmin && (
-          <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6">
-              <p className="text-sm text-red-700 font-bold">CRITICAL: Ghost Profile Detected</p>
-              <button onClick={() => { setShowSql(true); navigator.clipboard.writeText(getMigrationSql()); }} className="mt-2 bg-red-100 text-red-800 text-xs px-2 py-1 rounded">Copy Repair SQL</button>
-          </div>
-      )}
-      {error && <div className="bg-red-50 text-red-700 p-4 rounded-lg">{error}</div>}
-      {successMsg && <div className="bg-emerald-50 text-emerald-600 p-4 rounded-lg">{successMsg}</div>}
-
-      <div className="flex border-b border-slate-200">
-          {isAdmin && <button onClick={() => setActiveTab('system')} className={`px-6 py-3 text-sm ${activeTab === 'system' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}>System Management</button>}
-          {isSuperuser && <button onClick={() => setActiveTab('projects')} className={`px-6 py-3 text-sm ${activeTab === 'projects' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}>Projects</button>}
-          {isSuperuser && <button onClick={() => setActiveTab('team')} className={`px-6 py-3 text-sm ${activeTab === 'team' ? 'border-b-2 border-indigo-600 text-indigo-600' : 'text-slate-500'}`}>Team</button>}
-      </div>
-
-      {isAdmin && activeTab === 'system' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-1 bg-white p-6 rounded-xl border border-slate-200 h-fit">
-                <h3 className="font-bold mb-4">Invite System User</h3>
-                <form onSubmit={handleSendInvite} className="flex flex-col gap-4">
-                    <input type="email" required value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} className="w-full px-3 py-2 border rounded text-sm" placeholder="user@example.com" />
-                    <select value={inviteAppRole} onChange={e => setInviteAppRole(e.target.value as AppRole)} className="w-full px-3 py-2 border rounded text-sm bg-slate-50">
-                        <option value="admin">Administrator</option>
-                        <option value="superuser">Superuser</option>
-                    </select>
-                    <button type="submit" disabled={isInviting} className="bg-indigo-600 text-white py-2 rounded text-sm">{isInviting ? 'Sending...' : 'Invite'}</button>
-                </form>
-                <div className="mt-6 pt-6 border-t border-slate-100">
-                    <button onClick={() => setShowSql(!showSql)} className="text-xs text-slate-400 underline">{showSql ? 'Hide SQL' : 'Show Database Migration SQL'}</button>
-                    {showSql && <pre className="mt-2 bg-slate-900 text-slate-300 p-3 rounded text-xs overflow-x-auto">{getMigrationSql()}</pre>}
-                </div>
-            </div>
-            <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 overflow-hidden">
-                <table className="w-full text-sm text-left">
-                    <thead className="bg-slate-50 text-slate-500 font-medium"><tr><th className="px-6 py-3">User</th><th className="px-6 py-3">Role</th><th className="px-6 py-3">Action</th></tr></thead>
-                    <tbody className="divide-y divide-slate-100">
-                        {pendingSystemInvites.map(inv => (
-                            <tr key={inv.id} className="bg-amber-50">
-                                <td className="px-6 py-4"><div>Pending Invite</div><div className="text-xs">{inv.email}</div></td>
-                                <td className="px-6 py-4">{inv.target_app_role}</td>
-                                <td className="px-6 py-4"><button onClick={() => handleRevokeInvitation(inv.id)} className="text-red-500 text-xs">Revoke</button></td>
-                            </tr>
-                        ))}
-                        {profiles.filter(p => p.app_role === 'admin' || p.app_role === 'superuser').map(p => (
-                            <tr key={p.id}>
-                                <td className="px-6 py-4"><div>{p.full_name}</div><div className="text-xs">{p.email}</div></td>
-                                <td className="px-6 py-4"><span className="px-2 py-1 bg-slate-100 rounded-full text-xs font-bold">{p.app_role}</span></td>
-                                <td className="px-6 py-4 flex gap-2">
-                                    <button onClick={() => setResetTarget(p)} className="text-indigo-600 hover:text-indigo-800 text-xs font-medium bg-indigo-50 px-2 py-1 rounded">Password</button>
-                                    {p.id !== profile.id && <button onClick={() => handleDeleteUser(p)} className="text-red-500">Del</button>}
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-      )}
-
-      {/* Projects and Team Tab content */}
-      {isSuperuser && activeTab === 'projects' && (
-          <div className="space-y-8">
-               <div className="bg-white p-6 rounded-xl border border-slate-200">
-                  <h3 className="font-bold mb-4">Create Project</h3>
-                  <div className="grid grid-cols-3 gap-4">
-                      <input value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="Name" className="px-3 py-2 border rounded text-sm" />
-                      <input value={projectCompany} onChange={e => setProjectCompany(e.target.value)} placeholder="Company" className="px-3 py-2 border rounded text-sm" />
-                      <input value={projectIco} onChange={e => setProjectIco(e.target.value)} placeholder="IČO" className="px-3 py-2 border rounded text-sm" />
-                      <input value={projectDescription} onChange={e => setProjectDescription(e.target.value)} placeholder="Description" className="px-3 py-2 border rounded text-sm col-span-2" />
-                      <select value={projectCurrency} onChange={e => setProjectCurrency(e.target.value)} className="px-3 py-2 border rounded text-sm"><option value="CZK">CZK</option><option value="EUR">EUR</option></select>
-                  </div>
-                  <button onClick={handleCreateProject} disabled={isCreatingProject} className="mt-4 bg-indigo-600 text-white px-6 py-2 rounded text-sm">Create</button>
-                  <div className="mt-6 pt-4 border-t border-slate-100">
-                        <button onClick={() => setShowSql(!showSql)} className="text-xs text-slate-400 underline">{showSql ? 'Hide SQL' : 'Show Database Migration SQL'}</button>
-                        {showSql && <pre className="mt-2 bg-slate-900 text-slate-300 p-3 rounded text-xs overflow-x-auto">{getMigrationSql()}</pre>}
-                  </div>
-               </div>
-               
-               {/* Hidden file input */}
-               <input type="file" accept=".xml" ref={fileInputRef} onChange={handleBudgetFileChange} className="hidden" />
-
-               <div className="grid gap-4">
-                  {projects.map(proj => {
-                      const assignedUsers = getAssignedUsersForProject(proj.id);
-                      return (
-                      <div key={proj.id} className="bg-white border border-slate-200 rounded-xl p-6">
-                          <div className="flex justify-between items-start">
-                              <div>
-                                  <h4 className="font-bold text-lg">{proj.name}</h4>
-                                  <p className="text-sm text-slate-600">{proj.company_name} {proj.ico && `(IČO: ${proj.ico})`}</p>
-                                  <div className="mt-4">
-                                      <label className="text-xs font-bold text-slate-400 uppercase">Assigned Team</label>
-                                      {assignedUsers.length > 0 ? (
-                                          <div className="flex flex-col gap-1 mt-1">
-                                              {assignedUsers.map(u => {
-                                                  const role = allOwnerAssignments.find(a => a.project_id === proj.id && a.user_id === u.id)?.role;
-                                                  return <div key={u.id} className="text-sm text-slate-700">
-                                                      <span className="font-medium">{u.full_name}</span> 
-                                                      <span className="text-slate-400 text-xs ml-2">{u.email}</span>
-                                                      {role && <span className="ml-2 text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100">{formatRoleName(role)}</span>}
-                                                  </div>
-                                              })}
-                                          </div>
-                                      ) : <div className="text-xs text-slate-400 italic">No members assigned</div>}
-                                  </div>
-                                  
-                                  {/* BUDGET LIST */}
-                                  <div className="mt-4">
-                                      <label className="text-xs font-bold text-slate-400 uppercase">Budgets</label>
-                                      {proj.budgets && proj.budgets.length > 0 ? (
-                                          <div className="flex flex-col gap-2 mt-1">
-                                              {proj.budgets.map(b => (
-                                                  <div key={b.id} className="flex items-center gap-2 text-sm">
-                                                      <div className={`w-2 h-2 rounded-full ${b.is_active ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                                                      <span className={b.is_active ? 'font-medium text-emerald-800' : 'text-slate-500'}>{b.version_name}</span>
-                                                      {!b.is_active && (
-                                                          <button onClick={() => handleToggleActiveBudget(proj.id, b.id)} className="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
-                                                              Make Active
-                                                          </button>
-                                                      )}
-                                                  </div>
-                                              ))}
-                                          </div>
-                                      ) : <div className="text-xs text-slate-400 italic">No budgets uploaded</div>}
-                                  </div>
-                              </div>
-                              <div className="flex flex-col gap-2">
-                                <button onClick={() => handleBudgetClick(proj.id)} className="text-sm text-indigo-600 bg-indigo-50 px-4 py-2 rounded">
-                                    {uploadingBudget && selectedProjectId === proj.id ? 'Uploading...' : 'Upload Budget'}
-                                </button>
-                                <button onClick={() => openTeamManager(proj)} className="text-sm text-slate-700 bg-slate-100 px-4 py-2 rounded">Manage Team</button>
-                                <button onClick={() => handleDeleteProject(proj.id)} className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded">Delete</button>
-                              </div>
-                          </div>
-                      </div>
-                  )})}
-               </div>
-          </div>
-      )}
-
-      {isSuperuser && activeTab === 'team' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-               <div className="lg:col-span-1 bg-white p-6 rounded-xl border border-slate-200 h-fit">
-                   <h3 className="font-bold mb-4">Invite Team Member</h3>
-                   <form onSubmit={handleSendInvite} className="flex flex-col gap-4">
-                       <input type="email" required value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} className="w-full px-3 py-2 border rounded text-sm" placeholder="email" />
-                       <select value={inviteProjectId} onChange={e => setInviteProjectId(e.target.value)} className="w-full px-3 py-2 border rounded text-sm">
-                           <option value="">-- No Project --</option>
-                           {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                       </select>
-                       <select value={inviteProjectRole} onChange={e => setInviteProjectRole(e.target.value as ProjectRole)} className="w-full px-3 py-2 border rounded text-sm">
-                           <option value="lineproducer">Line Producer</option>
-                           <option value="producer">Producer</option>
-                           <option value="accountant">Accountant</option>
-                       </select>
-                       <button type="submit" disabled={isInviting} className="bg-indigo-600 text-white py-2 rounded text-sm">Invite</button>
-                   </form>
-                   <div className="mt-6 pt-4 border-t border-slate-100">
-                        <button onClick={() => setShowSql(!showSql)} className="text-xs text-slate-400 underline">{showSql ? 'Hide SQL' : 'Show Database Migration SQL'}</button>
-                        {showSql && <pre className="mt-2 bg-slate-900 text-slate-300 p-3 rounded text-xs overflow-x-auto">{getMigrationSql()}</pre>}
-                   </div>
-               </div>
-               <div className="lg:col-span-2 space-y-8">
-                   <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                       <h4 className="font-bold text-slate-700 text-sm p-4 bg-slate-50 border-b border-slate-100">Pending Invitations</h4>
-                       <table className="w-full text-sm text-left">
-                           <tbody>
-                               {invitations.map(inv => (
-                                   <tr key={inv.id} className="hover:bg-slate-50"><td className="px-6 py-3">{inv.email}</td><td className="px-6 py-3 text-right"><button onClick={() => handleRevokeInvitation(inv.id)} className="text-red-500">Revoke</button></td></tr>
-                               ))}
-                           </tbody>
-                       </table>
-                   </div>
-                   <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-                       <h4 className="font-bold text-slate-700 text-sm p-4 bg-slate-50 border-b border-slate-100">My Team</h4>
-                       <table className="w-full text-sm text-left">
-                           <thead className="bg-slate-50 text-xs text-slate-500 uppercase font-bold border-b border-slate-100">
-                               <tr>
-                                   <th className="px-6 py-2">Member</th>
-                                   <th className="px-6 py-2">Assignments</th>
-                                   <th className="px-6 py-2 text-right">Action</th>
-                               </tr>
-                           </thead>
-                           <tbody className="divide-y divide-slate-100">
-                               {profiles.filter(p => p.invited_by === profile.id).map(p => {
-                                   const assignments = allOwnerAssignments.filter(a => a.user_id === p.id);
-                                   return (
-                                   <tr key={p.id} className="hover:bg-slate-50">
-                                       <td className="px-6 py-3">
-                                           <div className="font-medium text-slate-900">{p.full_name || 'Unknown'}</div>
-                                           <div className="text-xs text-slate-500">{p.email}</div>
-                                       </td>
-                                       <td className="px-6 py-3">
-                                           {assignments.length > 0 ? (
-                                               <div className="space-y-1">
-                                                   {assignments.map(a => (
-                                                       <div key={a.id} className="flex items-center gap-2 text-xs">
-                                                           <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-100 font-bold uppercase text-[10px]">
-                                                               {formatRoleName(a.role)}
-                                                           </span>
-                                                           <span className="text-slate-600 truncate max-w-[150px]" title={a.project?.name}>
-                                                               {a.project?.name}
-                                                           </span>
-                                                       </div>
-                                                   ))}
-                                               </div>
-                                           ) : (
-                                               <span className="text-xs text-slate-400 italic">Unassigned</span>
-                                           )}
-                                       </td>
-                                       <td className="px-6 py-3 text-right flex items-center justify-end gap-2">
-                                           <button onClick={() => setResetTarget(p)} className="text-indigo-600 hover:text-indigo-800 text-xs font-medium px-2 py-1 bg-indigo-50 rounded">Password</button>
-                                           <button onClick={() => handleDeleteUser(p)} className="text-red-500 hover:text-red-700 text-xs font-medium">Delete</button>
-                                       </td>
-                                   </tr>
-                               )})}
-                               {profiles.filter(p => p.invited_by === profile.id).length === 0 && (
-                                   <tr><td colSpan={3} className="px-6 py-8 text-center text-slate-400 italic">No active team members.</td></tr>
-                               )}
-                           </tbody>
-                       </table>
-                   </div>
-               </div>
-          </div>
-      )}
-      
-      {/* Modals */}
-      {resetTarget && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-            <div className="bg-white p-6 rounded-xl w-full max-w-sm">
-                <h3 className="font-bold mb-4">Reset Password</h3>
-                <p className="text-xs text-slate-500 mb-4">For user: {resetTarget.email}</p>
-                <input type="text" value={newPassword} onChange={e => setNewPassword(e.target.value)} className="w-full border p-2 rounded mb-4" placeholder="New Password" />
-                <button onClick={handlePasswordReset} className="bg-indigo-600 text-white px-4 py-2 rounded mr-2" disabled={isResetting}>{isResetting ? 'Saving...' : 'Save'}</button>
-                <button onClick={() => setResetTarget(null)} className="text-slate-500">Cancel</button>
-            </div>
-        </div>
-      )}
-      {activeProjectForTeam && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white p-6 rounded-xl w-full max-w-2xl">
-                  <h3 className="font-bold mb-4">Manage Team: {activeProjectForTeam.name}</h3>
-                  <div className="flex gap-2 mb-6">
-                      <select value={assignUserId} onChange={e => setAssignUserId(e.target.value)} className="flex-1 border p-2 rounded">
-                          <option value="">Select user...</option>
-                          {profiles.filter(p => p.invited_by === profile.id).map(p => <option key={p.id} value={p.id}>{p.full_name || p.email}</option>)}
-                      </select>
-                      <button onClick={handleAddAssignment} className="bg-indigo-600 text-white px-4 py-2 rounded">Add</button>
-                  </div>
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {projectAssignments.map(a => (
-                        <div key={a.id} className="flex justify-between items-center p-3 border-b hover:bg-slate-50 transition-colors">
-                            <div className="flex flex-col">
-                                <div className="flex items-center gap-2">
-                                    <span className="font-medium text-slate-800">{a.profile?.full_name || 'Unknown User'}</span>
-                                    <span className="text-[10px] text-slate-500">{a.profile?.email}</span>
-                                    <span className="text-[10px] uppercase font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded border border-indigo-100">
-                                        {formatRoleName(a.role)}
-                                    </span>
-                                </div>
-                            </div>
-                            <button onClick={() => handleRemoveAssignment(a.id)} className="text-red-500 hover:text-red-700 text-sm font-medium px-2 py-1">
-                                Remove
-                            </button>
-                        </div>
-                    ))}
-                    {projectAssignments.length === 0 && <p className="text-center text-slate-400 italic py-4">No members assigned to this project yet.</p>}
-                  </div>
-                  <button onClick={closeTeamManager} className="mt-4 text-slate-500 w-full py-2 bg-slate-100 rounded hover:bg-slate-200">Close</button>
-              </div>
-          </div>
-      )}
-    </div>
-  );
-};
-
-export default AdminDashboard;
+    RAISE NOTICE 'Initial admin profile setup complete.';
+END $$;
+    

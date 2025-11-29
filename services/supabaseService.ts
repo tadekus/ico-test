@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole, BudgetLine, InvoiceAllocation } from '../types';
 import { parseBudgetXml } from '../utils/budgetParser';
@@ -18,6 +19,11 @@ const normalizeIco = (ico: string | null | undefined): string | null => {
     // Remove all non-digit characters (spaces, dashes, 'CZ' prefix, etc.)
     return ico.replace(/[^0-9]/g, '');
 };
+
+const normalizeVariableSymbol = (vs: string | null | undefined): string | null => {
+  if (!vs) return null;
+  return vs.replace(/\s/g, ''); // Remove all whitespace
+}
 
 // --- AUTHENTICATION ---
 
@@ -252,7 +258,10 @@ export const saveExtractionResult = async (
         raw_text: result.rawText,
         status: status,
         file_content: base64 || null,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        // Initialize new fields (will be updated by trigger)
+        total_allocated_amount: 0, 
+        has_allocations: false
       }
     ])
     .select()
@@ -273,9 +282,15 @@ export const updateInvoice = async (
     if (finalUpdates.ico) {
         finalUpdates.ico = normalizeIco(finalUpdates.ico);
     }
-    if (finalUpdates.variable_symbol) {
-        finalUpdates.variable_symbol = finalUpdates.variable_symbol.replace(/\s/g, '');
+    // FIX: Corrected property name from 'variable_symbol' to 'variableSymbol'
+    if (finalUpdates.variableSymbol) {
+        finalUpdates.variableSymbol = finalUpdates.variableSymbol.replace(/\s/g, '');
     }
+
+    // Do NOT update total_allocated_amount or has_allocations directly here,
+    // as these are managed by the database trigger for invoice_allocations.
+    delete (finalUpdates as any).total_allocated_amount;
+    delete (finalUpdates as any).has_allocations;
 
     const { data, error } = await supabase
         .from('invoices')
@@ -291,11 +306,16 @@ export const updateInvoice = async (
 export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]> => {
   if (!supabase) throw new Error("Supabase is not configured.");
 
-  // OPTIMIZATION: EXCLUDE file_content
-  // This drastically reduces payload size (from ~50MB to ~50KB for a list)
+  // OPTIMIZATION: EXCLUDE file_content for list view
+  // Include new allocation summary fields
   let query = supabase
     .from('invoices')
-    .select('id, created_at, internal_id, ico, company_name, description, amount_with_vat, amount_without_vat, currency, status, project_id, variable_symbol, bank_account, iban, confidence, rejection_reason')
+    .select(`
+      id, created_at, internal_id, ico, company_name, description, 
+      amount_with_vat, amount_without_vat, currency, status, project_id, 
+      variable_symbol, bank_account, iban, confidence, rejection_reason,
+      total_allocated_amount, has_allocations, file_content, raw_text, user_id
+    `) // Re-added file_content for list view to simplify handling in InvoiceDetail
     .order('internal_id', { ascending: false });
 
   if (projectId) {
@@ -311,6 +331,8 @@ export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]>
 };
 
 export const fetchInvoiceFileContent = async (invoiceId: number): Promise<string | null> => {
+    // We now fetch file_content with fetchInvoices. This function might be redundant
+    // but kept for explicit clarity if needed for specific cases.
     if (!supabase) return null;
     const { data, error } = await supabase
         .from('invoices')
@@ -325,6 +347,12 @@ export const fetchInvoiceFileContent = async (invoiceId: number): Promise<string
 export const deleteInvoice = async (id: number): Promise<void> => {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { error } = await supabase.from('invoices').delete().eq('id', id);
+  if (error) throw error;
+};
+
+export const deleteInvoices = async (ids: number[]): Promise<void> => {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  const { error } = await supabase.from('invoices').delete().in('id', ids);
   if (error) throw error;
 };
 
@@ -809,3 +837,4 @@ export const deleteInvitation = async (id: number) => {
   const { error } = await supabase.from('user_invitations').delete().eq('id', id);
   if (error) throw error;
 };
+    

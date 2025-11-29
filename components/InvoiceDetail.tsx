@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { FileData, ExtractionResult, Project, SavedInvoice, BudgetLine, InvoiceAllocation } from '../types';
 import { updateInvoice, fetchActiveBudgetLines, fetchInvoiceAllocations, saveInvoiceAllocation, deleteInvoiceAllocation, fetchVendorBudgetHistory, fetchInvoiceFileContent } from '../services/supabaseService';
@@ -57,7 +58,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
         companyName: invoice.company_name || fileData.extractionResult?.companyName || null,
         bankAccount: invoice.bank_account || fileData.extractionResult?.bankAccount || null,
         iban: invoice.iban || fileData.extractionResult?.iban || null,
-        variableSymbol: invoice.variable_symbol || fileData.extractionResult?.variableSymbol || null,
+        // FIX: Use 'variableSymbol' from SavedInvoice type
+        variableSymbol: invoice.variableSymbol || fileData.extractionResult?.variableSymbol || null,
         description: invoice.description || fileData.extractionResult?.description || null,
         amountWithVat: invoice.amount_with_vat || fileData.extractionResult?.amountWithVat || null,
         amountWithoutVat: invoice.amount_without_vat || fileData.extractionResult?.amountWithoutVat || null,
@@ -109,7 +111,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   if (!editedResult) return <div className="p-8 text-center text-slate-500">Loading invoice data...</div>;
 
   // Render-time calculation for UI feedback
-  const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
+  // Now using invoice.total_allocated_amount from the DB for more accurate balance check
+  const totalAllocated = invoice.total_allocated_amount || allocations.reduce((sum, a) => sum + a.amount, 0);
   const invoiceTotal = editedResult?.amountWithoutVat || 0;
   const unallocated = invoiceTotal - totalAllocated;
   const isBalanced = Math.abs(unallocated) <= 1; // Allow small tolerance for UI
@@ -119,7 +122,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
     setErrorMessage(null);
     
     // RECALCULATE STRICTLY INSIDE HANDLER to prevent stale closure variables
-    const currentTotalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
+    const currentTotalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0); // Still use local for current op
     const currentInvoiceTotal = editedResult?.amountWithoutVat || 0;
     const currentUnallocated = currentInvoiceTotal - currentTotalAllocated;
     
@@ -141,7 +144,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
       const updates: Partial<SavedInvoice> = {
           company_name: editedResult.companyName || null,
           ico: editedResult.ico || null,
-          variable_symbol: editedResult.variableSymbol || null,
+          // FIX: Use 'variableSymbol' to match SavedInvoice type.
+          variableSymbol: editedResult.variableSymbol || null,
           description: editedResult.description || null,
           amount_without_vat: editedResult.amountWithoutVat || null,
           amount_with_vat: editedResult.amountWithVat || null,
@@ -216,10 +220,11 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const handleSelectBudgetLine = (line: BudgetLine) => {
       setSelectedBudgetLine(line);
       setAllocationSearch(`${line.account_number} - ${line.account_description}`);
-      const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
-      const invoiceTotal = editedResult?.amountWithoutVat || 0;
-      const remaining = Math.max(0, invoiceTotal - totalAllocated);
-      setAllocationAmount(remaining > 0 ? remaining : 0);
+      const totalAllocatedFromCurrent = allocations.reduce((sum, a) => sum + a.amount, 0);
+      const invoiceTotalAmount = editedResult?.amountWithoutVat || 0;
+      const remainingForAllocation = Math.max(0, invoiceTotalAmount - totalAllocatedFromCurrent);
+      // FIX: Changed 'remaining' to 'remainingForAllocation'
+      setAllocationAmount(remainingForAllocation > 0 ? remainingForAllocation : 0);
   };
 
   const handleConfirmAllocation = async () => {
@@ -232,6 +237,9 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
           setSelectedBudgetLine(null);
           setAllocationSearch('');
           setAllocationAmount(0);
+          // After allocation change, the parent InvoicingModule might need to refresh
+          // for the total_allocated_amount and has_allocations flags to update via trigger
+          onSaved(null); // Call onSaved to trigger a data refresh in parent
       } catch (err) { alert("Failed to allocate budget line"); } finally { setIsAllocating(false); }
   };
 
@@ -240,12 +248,15 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
       try {
           await deleteInvoiceAllocation(id);
           setAllocations(prev => prev.filter(a => a.id !== id));
+          // After allocation change, the parent InvoicingModule might need to refresh
+          // for the total_allocated_amount and has_allocations flags to update via trigger
+          onSaved(null); // Call onSaved to trigger a data refresh in parent
       } catch (err) { alert("Failed to remove allocation"); }
   };
 
   const getInputClass = (value: string | number | null | undefined) => {
       const isMissing = value === null || value === undefined || value === '' || (typeof value === 'number' && isNaN(value));
-      return `w-full px-2 border rounded text-[10px] outline-none transition-colors ${
+      return `w-full px-2 border rounded text-sm outline-none transition-colors ${ // Increased font from text-[10px] to text-sm
           isLocked ? 'bg-slate-50 text-slate-600 border-transparent' : 
           isMissing 
             ? 'bg-red-50 border-red-300 focus:border-red-500 text-red-900 placeholder-red-300' 
@@ -285,11 +296,11 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
         {isLocked && <div className="absolute top-0 right-0 m-2 px-3 py-1 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-full z-10 shadow-sm border border-emerald-200">APPROVED BY PRODUCER</div>}
         
         <div className="p-3 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-xl shrink-0">
-           <button onClick={onBack} className="text-slate-500 hover:text-indigo-600 text-xs flex items-center gap-1 font-medium">
+           <button onClick={onBack} className="text-slate-500 hover:text-indigo-600 text-sm flex items-center gap-1 font-medium"> {/* Increased font from text-xs to text-sm */}
              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
              Back
            </button>
-           <div className="text-xs text-slate-500 font-mono">Invoice #{invoice.internal_id}</div>
+           <div className="text-sm text-slate-500 font-mono">Invoice #{invoice.internal_id}</div> {/* Increased font from text-xs to text-sm */}
         </div>
 
         {isRejected && !isProducer && (
@@ -297,8 +308,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 <div className="flex items-start gap-2">
                     <svg className="w-4 h-4 text-red-500 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                     <div>
-                        <p className="text-xs font-bold text-red-700">REJECTED BY PRODUCER</p>
-                        <p className="text-xs text-red-600 mt-1">{invoice.rejection_reason}</p>
+                        <p className="text-sm font-bold text-red-700">REJECTED BY PRODUCER</p> {/* Increased font from text-xs to text-sm */}
+                        <p className="text-sm text-red-600 mt-1">{invoice.rejection_reason}</p> {/* Increased font from text-xs to text-sm */}
                     </div>
                 </div>
             </div>
@@ -309,8 +320,8 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
             {/* ALLOCATION */}
             <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 shadow-sm">
                 <div className="flex justify-between items-center mb-3">
-                    <label className="text-xs font-bold text-indigo-600 uppercase tracking-wide">Budget Allocation</label>
-                    <span className="text-[10px] font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+                    <label className="text-sm font-bold text-indigo-600 uppercase tracking-wide">Budget Allocation</label> {/* Increased font from text-xs to text-sm */}
+                    <span className="text-sm font-mono text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200"> {/* Increased font from text-[10px] to text-sm */}
                         {allocations.length} items
                     </span>
                 </div>
@@ -318,7 +329,7 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                 {/* SUGGESTIONS: Hide if Locked OR Producer */}
                 {!isLocked && !isProducer && availableSuggestions.length > 0 && (
                     <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg shadow-sm">
-                        <h4 className="text-xs font-bold text-amber-800 uppercase mb-3 flex items-center gap-2">
+                        <h4 className="text-sm font-bold text-amber-800 uppercase mb-3 flex items-center gap-2"> {/* Increased font from text-xs to text-sm */}
                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
                             Suggested for this Supplier
                         </h4>
@@ -326,12 +337,12 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                             {availableSuggestions.map(line => (
                                 <div key={line.id} className="flex justify-between items-center bg-white p-3 rounded border border-amber-100 shadow-sm">
                                     <div className="min-w-0 flex-1 mr-3">
-                                        <div className="font-bold text-slate-800 text-sm truncate">
-                                            <span className="font-mono text-indigo-600 mr-2 text-xs bg-indigo-50 px-1.5 py-0.5 rounded">{line.account_number}</span>
+                                        <div className="font-bold text-slate-800 text-base truncate"> {/* Increased font from text-sm to text-base */}
+                                            <span className="font-mono text-indigo-600 mr-2 text-sm bg-indigo-50 px-1.5 py-0.5 rounded">{line.account_number}</span> {/* Increased font from text-xs to text-sm */}
                                             {line.account_description}
                                         </div>
                                     </div>
-                                    <button onClick={() => handleSelectBudgetLine(line)} className="text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 px-4 py-2 rounded shadow-sm transition-colors">USE</button>
+                                    <button onClick={() => handleSelectBudgetLine(line)} className="text-sm font-bold text-white bg-amber-500 hover:bg-amber-600 px-4 py-2 rounded shadow-sm transition-colors">USE</button> {/* Increased font from text-xs to text-sm */}
                                 </div>
                             ))}
                         </div>
@@ -349,14 +360,14 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
                                 className="w-full text-sm px-3 py-2 border rounded outline-none focus:ring-2 focus:ring-indigo-500"
                             />
                             {filteredBudgetLines.length > 0 && (
-                                <div className="absolute top-full left-0 w-full bg-white border shadow-xl rounded-lg mt-1 max-h-60 overflow-auto z-50 text-sm divide-y divide-slate-50">
+                                <div className="absolute top-full left-0 w-full bg-white border shadow-xl rounded-lg mt-1 max-h-60 overflow-auto z-50 text-base divide-y divide-slate-50"> {/* Increased font from text-sm to text-base */}
                                     {filteredBudgetLines.map(line => (
                                         <div key={line.id} className="p-3 hover:bg-indigo-50 cursor-pointer flex justify-between items-center group transition-colors" onClick={() => handleSelectBudgetLine(line)}>
                                             <div className="overflow-hidden pr-2">
                                                 <div className="font-bold text-indigo-700 truncate"><span className="font-mono mr-2 opacity-80 bg-indigo-50 px-1 rounded">{line.account_number}</span>{line.account_description}</div>
-                                                <div className="text-xs text-slate-400 truncate mt-0.5">{line.category_description}</div>
+                                                <div className="text-sm text-slate-400 truncate mt-0.5">{line.category_description}</div> {/* Increased font from text-xs to text-sm */}
                                             </div>
-                                            <div className="font-mono text-slate-500 whitespace-nowrap text-xs bg-slate-50 px-2 py-1 rounded border border-slate-100">{formatCurrency(line.original_amount)}</div>
+                                            <div className="font-mono text-slate-500 whitespace-nowrap text-sm bg-slate-50 px-2 py-1 rounded border border-slate-100">{formatCurrency(line.original_amount)}</div> {/* Increased font from text-xs to text-sm */}
                                         </div>
                                     ))}
                                 </div>
@@ -369,42 +380,42 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 
                 <div className="space-y-2 max-h-48 overflow-y-auto mb-3 pr-1">
                     {allocations.map(alloc => (
-                        <div key={alloc.id} className="flex justify-between items-center text-sm bg-white border border-slate-200 p-2.5 rounded shadow-sm hover:border-indigo-300 transition-colors">
+                        <div key={alloc.id} className="flex justify-between items-center text-base bg-white border border-slate-200 p-2.5 rounded shadow-sm hover:border-indigo-300 transition-colors"> {/* Increased font from text-sm to text-base */}
                             <div className="flex-1 min-w-0">
-                                <span className="font-mono font-bold text-indigo-600 mr-2 text-xs bg-indigo-50 px-1.5 py-0.5 rounded">{alloc.budget_line?.account_number}</span>
+                                <span className="font-mono font-bold text-indigo-600 mr-2 text-sm bg-indigo-50 px-1.5 py-0.5 rounded">{alloc.budget_line?.account_number}</span> {/* Increased font from text-xs to text-sm */}
                                 <span className="truncate text-slate-700 font-medium">{alloc.budget_line?.account_description}</span>
                             </div>
                             <div className="flex items-center gap-4 ml-3">
-                                <span className={`font-mono font-bold ${alloc.amount === 0 ? 'text-red-500' : 'text-slate-800'}`}>{formatCurrency(alloc.amount)}</span>
+                                <span className={`font-mono font-bold text-base ${alloc.amount === 0 ? 'text-red-500' : 'text-slate-800'}`}>{formatCurrency(alloc.amount)}</span> {/* Increased font from text-sm to text-base */}
                                 {/* REMOVE: Hide if Locked OR Producer */}
-                                {!isLocked && !isProducer && <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-xs font-bold px-2 py-1 hover:bg-red-50 rounded transition-colors">✕</button>}
+                                {!isLocked && !isProducer && <button onClick={() => handleRemoveAllocation(alloc.id)} className="text-slate-300 hover:text-red-500 text-sm font-bold px-2 py-1 hover:bg-red-50 rounded transition-colors">✕</button>} {/* Increased font from text-xs to text-sm */}
                             </div>
                         </div>
                     ))}
                 </div>
                 
-                <div className="pt-3 border-t border-slate-200 text-sm space-y-2 bg-slate-50/50 -mx-4 -mb-4 p-4 rounded-b-lg">
-                    <div className="flex justify-between items-center"><span className="text-xs text-slate-500 uppercase font-bold tracking-wide">Total Allocated</span><div className="font-mono font-bold text-slate-800 text-base">{formatCurrency(totalAllocated)}</div></div>
-                    <div className="flex justify-between items-center"><span className="text-xs text-slate-500 uppercase tracking-wide">Invoice Total (Base)</span><div className="font-mono text-slate-500">{formatCurrency(invoiceTotal)}</div></div>
-                    <div className="flex justify-between items-center pt-2 mt-2 border-t border-slate-200"><span className="text-xs text-slate-600 uppercase font-bold tracking-wide">Unallocated</span><span className={`font-mono font-bold text-base ${!isBalanced ? 'text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-100' : 'text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100'}`}>{formatCurrency(unallocated)}</span></div>
+                <div className="pt-3 border-t border-slate-200 text-base space-y-2 bg-slate-50/50 -mx-4 -mb-4 p-4 rounded-b-lg"> {/* Increased font from text-sm to text-base */}
+                    <div className="flex justify-between items-center"><span className="text-sm text-slate-500 uppercase font-bold tracking-wide">Total Allocated</span><div className="font-mono font-bold text-slate-800 text-lg">{formatCurrency(totalAllocated)}</div></div> {/* Increased font from text-xs/base to text-sm/lg */}
+                    <div className="flex justify-between items-center"><span className="text-sm text-slate-500 uppercase tracking-wide">Invoice Total (Base)</span><div className="font-mono text-slate-500 text-base">{formatCurrency(invoiceTotal)}</div></div> {/* Increased font from text-xs/base to text-sm/base */}
+                    <div className="flex justify-between items-center pt-2 mt-2 border-t border-slate-200"><span className="text-sm text-slate-600 uppercase font-bold tracking-wide">Unallocated</span><span className={`font-mono font-bold text-lg ${!isBalanced ? 'text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-100' : 'text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100'}`}>{formatCurrency(unallocated)}</span></div> {/* Increased font from text-xs/base to text-sm/lg */}
                 </div>
             </div>
 
             {/* DATA FORM */}
             <div className="space-y-1">
-                <div><label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Supplier</label><input disabled={isLocked} type="text" value={editedResult.companyName || ''} onChange={e => handleInputChange('companyName', e.target.value)} className={`${getInputClass(editedResult.companyName)} h-6 py-0.5`} /></div>
+                <div><label className="block text-xs font-bold text-slate-400 uppercase mb-0.5">Supplier</label><input disabled={isLocked} type="text" value={editedResult.companyName || ''} onChange={e => handleInputChange('companyName', e.target.value)} className={`${getInputClass(editedResult.companyName)} h-7`} /></div> {/* Increased font from text-[9px] to text-xs, height from h-6 to h-7 */}
                 <div className="grid grid-cols-2 gap-2">
-                    <div><label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">IČO</label><input disabled={isLocked} type="text" value={editedResult.ico || ''} onChange={e => handleInputChange('ico', e.target.value)} className={`${getInputClass(editedResult.ico)} font-mono h-6 py-0.5`} /></div>
-                    <div><label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Var. Symbol</label><input disabled={isLocked} type="text" value={editedResult.variableSymbol || ''} onChange={e => handleInputChange('variableSymbol', e.target.value)} className={`${getInputClass(editedResult.variableSymbol)} font-mono h-6 py-0.5`} /></div>
+                    <div><label className="block text-xs font-bold text-slate-400 uppercase mb-0.5">IČO</label><input disabled={isLocked} type="text" value={editedResult.ico || ''} onChange={e => handleInputChange('ico', e.target.value)} className={`${getInputClass(editedResult.ico)} font-mono h-7`} /></div> {/* Increased font from text-[9px] to text-xs, height from h-6 to h-7 */}
+                    <div><label className="block text-xs font-bold text-slate-400 uppercase mb-0.5">Var. Symbol</label><input disabled={isLocked} type="text" value={editedResult.variableSymbol || ''} onChange={e => handleInputChange('variableSymbol', e.target.value)} className={`${getInputClass(editedResult.variableSymbol)} font-mono h-7`} /></div> {/* Increased font from text-[9px] to text-xs, height from h-6 to h-7 */}
                 </div>
-                <div><label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Description</label><textarea disabled={isLocked} value={editedResult.description || ''} onChange={e => handleInputChange('description', e.target.value)} className={`${getInputClass(editedResult.description)} h-10 resize-none py-1 leading-tight`} /></div>
+                <div><label className="block text-xs font-bold text-slate-400 uppercase mb-0.5">Description</label><textarea disabled={isLocked} value={editedResult.description || ''} onChange={e => handleInputChange('description', e.target.value)} className={`${getInputClass(editedResult.description)} h-12 resize-none py-1 leading-tight`} /></div> {/* Increased font from text-[9px] to text-xs, height from h-10 to h-12 */}
                 <div className="grid grid-cols-2 gap-2">
-                    <div><label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Excl. VAT</label><input disabled={isLocked} type="number" value={editedResult.amountWithoutVat || ''} onChange={e => handleInputChange('amountWithoutVat', parseFloat(e.target.value))} className={`${getNumberInputClass(editedResult.amountWithoutVat)} text-[10px] h-6 py-0.5`} /></div>
-                    <div><label className="block text-[9px] font-bold text-slate-400 uppercase mb-0.5">Incl. VAT</label><input disabled={isLocked} type="number" value={editedResult.amountWithVat || ''} onChange={e => handleInputChange('amountWithVat', parseFloat(e.target.value))} className={`${getNumberInputClass(editedResult.amountWithVat)} text-[10px] h-6 py-0.5`} /></div>
+                    <div><label className="block text-xs font-bold text-slate-400 uppercase mb-0.5">Excl. VAT</label><input disabled={isLocked} type="number" value={editedResult.amountWithoutVat || ''} onChange={e => handleInputChange('amountWithoutVat', parseFloat(e.target.value))} className={`${getNumberInputClass(editedResult.amountWithoutVat)} text-xs h-7`} /></div> {/* Increased font from text-[10px] to text-xs, height from h-6 to h-7 */}
+                    <div><label className="block text-xs font-bold text-slate-400 uppercase mb-0.5">Incl. VAT</label><input disabled={isLocked} type="number" value={editedResult.amountWithVat || ''} onChange={e => handleInputChange('amountWithVat', parseFloat(e.target.value))} className={`${getNumberInputClass(editedResult.amountWithVat)} text-xs h-7`} /></div> {/* Increased font from text-[10px] to text-xs, height from h-6 to h-7 */}
                 </div>
                 <div className="grid grid-cols-1 gap-1 pt-1">
-                    <input disabled={isLocked} type="text" value={editedResult.bankAccount || ''} onChange={e => handleInputChange('bankAccount', e.target.value)} className={`${getInputClass(editedResult.bankAccount)} font-mono text-[9px] h-6 py-0.5`} placeholder="Local Account" />
-                    <input disabled={isLocked} type="text" value={editedResult.iban || ''} onChange={e => handleInputChange('iban', e.target.value)} className={`${getInputClass(editedResult.iban)} font-mono text-[9px] h-6 py-0.5`} placeholder="IBAN" />
+                    <input disabled={isLocked} type="text" value={editedResult.bankAccount || ''} onChange={e => handleInputChange('bankAccount', e.target.value)} className={`${getInputClass(editedResult.bankAccount)} font-mono text-xs h-7`} placeholder="Local Account" /> {/* Increased font from text-[9px] to text-xs, height from h-6 to h-7 */}
+                    <input disabled={isLocked} type="text" value={editedResult.iban || ''} onChange={e => handleInputChange('iban', e.target.value)} className={`${getInputClass(editedResult.iban)} font-mono text-xs h-7`} placeholder="IBAN" /> {/* Increased font from text-[9px] to text-xs, height from h-6 to h-7 */}
                 </div>
             </div>
         </div>
@@ -478,3 +489,4 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
 };
 
 export default InvoiceDetail;
+    

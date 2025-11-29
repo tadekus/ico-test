@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Project, SavedInvoice } from '../types';
 import { fetchInvoices } from '../services/supabaseService';
@@ -98,7 +99,8 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
               currency: activeInvoice.currency,
               confidence: activeInvoice.confidence,
               // Map full details for Producer View
-              variableSymbol: activeInvoice.variable_symbol,
+              // FIX: Use 'variableSymbol' from SavedInvoice type
+              variableSymbol: activeInvoice.variableSymbol,
               description: activeInvoice.description,
               bankAccount: activeInvoice.bank_account,
               iban: activeInvoice.iban,
@@ -120,8 +122,10 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
   }
 
   const formatAmount = (amount: number | null | undefined, currency: string | null) => {
-      if (!amount) return '-';
-      return new Intl.NumberFormat('cs-CZ').format(amount).replace(/\s/g, ' ') + ' ' + (currency || 'CZK');
+      if (amount === null || amount === undefined) return '-';
+      // Use amount_without_vat for display in list as requested
+      const formattedNum = new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount);
+      return `${formattedNum} ${currency || 'CZK'}`;
   };
 
   const handleSortChange = (key: string) => {
@@ -212,3 +216,4 @@ const ApprovalModule: React.FC<ApprovalModuleProps> = ({ currentProject }) => {
 };
 
 export default ApprovalModule;
+    
