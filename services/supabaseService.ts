@@ -1,3 +1,4 @@
+
 import { createClient } from '@supabase/supabase-js';
 import { ExtractionResult, SavedInvoice, Profile, Project, ProjectAssignment, ProjectRole, UserInvitation, Budget, AppRole, BudgetLine, InvoiceAllocation } from '../types';
 import { parseBudgetXml } from '../utils/budgetParser';
