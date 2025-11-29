@@ -219,7 +219,11 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
 
           const stampedPdfBytes = await stampInvoicePdf(fileContent, invoiceToStamp, currentProject, allocations);
           
-          const blob = new Blob([stampedPdfBytes.buffer.slice(0)], { type: 'application/pdf' });
+          // Ensure a plain ArrayBuffer is passed to Blob
+          const safeBuffer = new ArrayBuffer(stampedPdfBytes.byteLength);
+          new Uint8Array(safeBuffer).set(stampedPdfBytes);
+          const blob = new Blob([safeBuffer], { type: 'application/pdf' });
+
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
           link.href = url;
