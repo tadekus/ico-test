@@ -1,3 +1,4 @@
+
 export interface ExtractionResult {
   ico: string | null;
   companyName?: string | null;
@@ -20,7 +21,7 @@ export interface SavedInvoice {
   company_name: string | null;
   bank_account: string | null;
   iban: string | null;
-  variableSymbol?: string | null;
+  variable_symbol?: string | null;
   description?: string | null;
   amount_with_vat: number | null;
   amount_without_vat: number | null;
@@ -33,10 +34,6 @@ export interface SavedInvoice {
   rejection_reason?: string | null;
   file_content?: string | null; // Base64 content for preview
   allocations?: InvoiceAllocation[]; // Joined allocations
-  
-  // New fields for summary and list view optimization (populated by trigger)
-  total_allocated_amount?: number | null;
-  has_allocations?: boolean;
 }
 
 export interface FileData {

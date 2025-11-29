@@ -1,11 +1,9 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
 import { FileData, Project, SavedInvoice, Budget } from '../types';
 import { extractIcoFromDocument } from '../services/geminiService';
-import { fetchInvoices, saveExtractionResult, uploadBudget, setBudgetActive, fetchProjects, checkDuplicateInvoice, deleteInvoices, fetchInvoiceFileContent, fetchInvoiceAllocations } from '../services/supabaseService';
-import { stampInvoicePdf } from '../services/pdfService';
+import { fetchInvoices, saveExtractionResult, uploadBudget, setBudgetActive, fetchProjects, checkDuplicateInvoice, deleteInvoice } from '../services/supabaseService';
 
 interface InvoicingModuleProps {
   currentProject: Project | null;
@@ -22,7 +20,6 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
   // List View State
   const [activeListTab, setActiveListTab] = useState<'processing' | 'final_approved'>('processing');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'internal_id', direction: 'desc' });
-  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<number[]>([]); // For multi-select
   
   // Budget Management State
   const [budgetList, setBudgetList] = useState<Budget[]>([]);
@@ -44,7 +41,6 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
             .finally(() => setLoadingHistory(false));
         
         setStagedFiles([]);
-        setSelectedInvoiceIds([]); // Clear selection on project change
         
         // Restore view state from session storage if available
         const storedId = sessionStorage.getItem(`viewingInvoice_${currentProject.id}`);
@@ -164,88 +160,22 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
       e.stopPropagation(); // Prevent opening detail view
       if (!window.confirm("Are you sure you want to permanently delete this invoice?")) return;
       try {
-          await deleteInvoices([id]); // Use bulk delete for single item
+          await deleteInvoice(id);
           if (currentProject) {
               const updatedInvoices = await fetchInvoices(currentProject.id);
               setSavedInvoices(updatedInvoices);
-              setSelectedInvoiceIds(prev => prev.filter(invoiceId => invoiceId !== id)); // Remove from selection
           }
       } catch (err: any) {
           alert("Failed to delete: " + err.message);
       }
   };
 
-  const handleBulkDelete = async () => {
-      if (selectedInvoiceIds.length === 0) return;
-      if (!window.confirm(`Are you sure you want to delete ${selectedInvoiceIds.length} selected invoices? This is irreversible.`)) return;
-      try {
-          await deleteInvoices(selectedInvoiceIds);
-          if (currentProject) {
-              const updatedInvoices = await fetchInvoices(currentProject.id);
-              setSavedInvoices(updatedInvoices);
-              setSelectedInvoiceIds([]); // Clear selection after deletion
-          }
-      } catch (err: any) {
-          alert("Failed to delete selected invoices: " + err.message);
-      }
-  };
-
-  const handleToggleSelectInvoice = (id: number) => {
-      setSelectedInvoiceIds(prev => 
-          prev.includes(id) ? prev.filter(invoiceId => invoiceId !== id) : [...prev, id]
-      );
-  };
-
-  const handleSelectAllInvoices = () => {
-      const allDisplayableIds = sortedInvoices.map(inv => inv.id);
-      if (selectedInvoiceIds.length === allDisplayableIds.length) {
-          setSelectedInvoiceIds([]); // Deselect all
-      } else {
-          setSelectedInvoiceIds(allDisplayableIds); // Select all
-      }
-  };
-
-  const handleDownloadStampFromList = async (e: React.MouseEvent, invoiceToStamp: SavedInvoice) => {
-      e.stopPropagation(); // Prevent opening detail view
-      // Check for necessary properties, defaulting total_allocated_amount to 0 for safety
-      if (!currentProject || !invoiceToStamp.id || !(invoiceToStamp.has_allocations ?? false) || (invoiceToStamp.amount_without_vat === null || invoiceToStamp.amount_without_vat === undefined)) return; 
-
-      try {
-          // Fetch full content on demand as list doesn't carry it
-          const fileContent = await fetchInvoiceFileContent(invoiceToStamp.id);
-          if (!fileContent) throw new Error("File content not found for stamping.");
-          
-          const allocations = await fetchInvoiceAllocations(invoiceToStamp.id);
-
-          const stampedPdfBytes = await stampInvoicePdf(fileContent, invoiceToStamp, currentProject, allocations);
-          
-          // Ensure a plain ArrayBuffer is passed to Blob
-          const safeBuffer = new ArrayBuffer(stampedPdfBytes.byteLength);
-          new Uint8Array(safeBuffer).set(stampedPdfBytes);
-          const blob = new Blob([safeBuffer], { type: 'application/pdf' });
-
-          const url = window.URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = `stamped_${invoiceToStamp.internal_id || 'invoice'}.pdf`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          window.URL.revokeObjectURL(url);
-          alert("Stamped PDF downloaded!");
-      } catch (err: any) {
-          console.error(err);
-          alert("Failed to generate stamped PDF: " + err.message);
-      }
-  };
-
-
-  const formatAmount = (amount: number | null | undefined, currency: string | null, hideCurrency = false) => {
+  const formatAmount = (amount: number | null | undefined, currency: string | null) => {
       if (amount === null || amount === undefined) return '-';
       const curr = currency || 'CZK';
       // Format 1000000 -> 1 000 000.00 (spaces as thousand separator)
-      const formattedNum = new Intl.NumberFormat('cs-CZ', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount);
-      return `${formattedNum}${hideCurrency ? '' : ` ${curr}`}`;
+      const formattedNum = amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+      return `${formattedNum} ${curr}`;
   };
 
   // BUDGET HANDLERS
@@ -339,12 +269,11 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
               companyName: activeInvoice.company_name,
               bankAccount: activeInvoice.bank_account,
               iban: activeInvoice.iban,
-              // FIX: Use 'variableSymbol' from SavedInvoice type
-              variableSymbol: activeInvoice.variableSymbol,
-              description: activeInvoice.description,
               amountWithVat: activeInvoice.amount_with_vat,
               amountWithoutVat: activeInvoice.amount_without_vat,
               currency: activeInvoice.currency,
+              variableSymbol: activeInvoice.variable_symbol,
+              description: activeInvoice.description,
               confidence: activeInvoice.confidence,
               rawText: activeInvoice.raw_text || undefined
           }
@@ -371,13 +300,10 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
       return <span className="text-indigo-600 ml-1">{sortConfig.direction === 'asc' ? '▲' : '▼'}</span>;
   };
 
-  const isAllSelected = selectedInvoiceIds.length === sortedInvoices.length && sortedInvoices.length > 0;
-  const isAnySelected = selectedInvoiceIds.length > 0;
-
   // VIEW: MAIN DASHBOARD
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-5 gap-6"> {/* Changed to col-span-5 for wider list */}
-       {/* LEFT COLUMN: UPLOAD (1/5 width) */}
+    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+       {/* LEFT COLUMN: UPLOAD (1/4 width) */}
        <div className="lg:col-span-1 space-y-4">
            <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-4">
                <h3 className="font-bold text-slate-800 mb-3 text-sm">Upload Invoices</h3>
@@ -415,12 +341,12 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
            )}
        </div>
 
-       {/* RIGHT COLUMN: PROJECT INVOICE LIST (4/5 width) */}
-       <div className="lg:col-span-4 bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[750px]">
+       {/* RIGHT COLUMN: PROJECT INVOICE LIST (3/4 width) */}
+       <div className="lg:col-span-3 bg-white rounded-xl shadow-lg border border-slate-200 flex flex-col h-[750px]">
            <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
                <div className="flex items-center gap-4">
                    <div>
-                       <h3 className="font-bold text-slate-800 text-base">Project Invoices</h3>
+                       <h3 className="font-bold text-slate-800">Project Invoices</h3>
                        <p className="text-xs text-slate-500">{currentProject ? currentProject.name : 'No Project Selected'}</p>
                    </div>
                    <div className="flex bg-white rounded-lg p-1 border border-slate-200 ml-4">
@@ -440,14 +366,6 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                </div>
                
                <div className="flex items-center gap-4">
-                   {/* BULK ACTIONS */}
-                   {isAnySelected && (
-                       <button onClick={handleBulkDelete} className="bg-red-500 text-white text-xs px-3 py-1.5 rounded-lg shadow-sm hover:bg-red-600 flex items-center gap-1">
-                           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                           Delete Selected ({selectedInvoiceIds.length})
-                       </button>
-                   )}
-
                    {/* BUDGET SETTINGS BUTTON */}
                    <button onClick={() => setShowBudgetModal(true)} className="text-xs font-medium text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-3 py-1.5 rounded flex items-center gap-1">
                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
@@ -458,107 +376,81 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
            </div>
            
            <div className="flex-1 overflow-auto">
-               <table className="w-full text-left">
-                   <thead className="bg-white text-slate-500 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-sm text-xs">
+               <table className="w-full text-sm text-left">
+                   <thead className="bg-white text-slate-500 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-sm">
                        <tr>
-                           <th className="px-3 py-2 w-10">
-                               <input type="checkbox" className="form-checkbox h-3.5 w-3.5 text-indigo-600 rounded" checked={isAllSelected} onChange={handleSelectAllInvoices} />
-                           </th>
                            <th 
-                               className="px-3 py-2 w-16 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
+                               className="px-6 py-3 w-20 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
                                onClick={() => handleSort('internal_id')}
                            >
-                               <div className="flex items-center">ID {renderSortIndicator('internal_id')}</div>
+                               <div className="flex items-center"># {renderSortIndicator('internal_id')}</div>
                            </th>
-                           <th className="px-3 py-2 w-20 whitespace-nowrap">Status</th>
+                           <th className="px-6 py-3 w-24 whitespace-nowrap">Status</th>
                            <th 
-                               className="px-3 py-2 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
+                               className="px-6 py-3 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
                                onClick={() => handleSort('company_name')}
                            >
                                <div className="flex items-center">Supplier {renderSortIndicator('company_name')}</div>
                            </th>
                            <th 
-                               className="px-3 py-2 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
+                               className="px-6 py-3 whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
                                onClick={() => handleSort('description')}
                            >
                                <div className="flex items-center">Description {renderSortIndicator('description')}</div>
                            </th>
                            <th 
-                               className="px-3 py-2 text-right whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
+                               className="px-6 py-3 text-right whitespace-nowrap cursor-pointer hover:bg-slate-50 transition-colors"
                                onClick={() => handleSort('amount_without_vat')}
                            >
-                               <div className="flex items-center justify-end">Amount {renderSortIndicator('amount_without_vat')}</div>
+                               <div className="flex items-center justify-end">Base Amount {renderSortIndicator('amount_without_vat')}</div>
                            </th>
-                           <th className="px-3 py-2 text-center w-24">Actions</th> {/* For Stamp & Delete */}
+                           <th className="px-6 py-3 text-right w-12"></th>
                        </tr>
                    </thead>
-                   <tbody className="divide-y divide-slate-100 text-sm">
-                       {sortedInvoices.map(inv => {
-                           // Check if invoice is balanced for stamp button
-                           const isInvoiceBalanced = (inv.amount_without_vat !== null && inv.amount_without_vat !== undefined) && 
-                               (inv.total_allocated_amount !== null && inv.total_allocated_amount !== undefined) && // Add explicit check
-                               Math.abs(inv.amount_without_vat - (inv.total_allocated_amount ?? 0)) <= 1.0; // Use nullish coalescing here
-
-                           return (
-                               <tr key={inv.id} 
-                                   onClick={() => setViewingInvoiceId(inv.id)}
-                                   className={`hover:bg-slate-50 transition-colors cursor-pointer group ${inv.status === 'rejected' ? 'bg-red-50 border-l-4 border-red-500' : ''}`}
-                               >
-                                   <td onClick={e => e.stopPropagation()} className="px-3 py-2">
-                                       <input 
-                                           type="checkbox" 
-                                           className="form-checkbox h-3.5 w-3.5 text-indigo-600 rounded" 
-                                           checked={selectedInvoiceIds.includes(inv.id)} 
-                                           onChange={() => handleToggleSelectInvoice(inv.id)} 
-                                       />
-                                   </td>
-                                   <td className="px-3 py-2 font-mono text-indigo-600 font-bold group-hover:text-indigo-800 text-[11px] whitespace-nowrap">
-                                       #{inv.internal_id || '-'}
-                                   </td>
-                                   <td className="px-3 py-2 whitespace-nowrap">
-                                       <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider
-                                           ${inv.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 
-                                             inv.status === 'final_approved' ? 'bg-indigo-100 text-indigo-700' :
-                                             inv.status === 'rejected' ? 'bg-red-100 text-red-700' : 
-                                             'bg-amber-100 text-amber-700'}`}>
-                                           {inv.status === 'approved' ? 'pending' : inv.status}
-                                       </span>
-                                   </td>
-                                   <td className="px-3 py-2 whitespace-nowrap">
-                                       <div className={`font-medium truncate max-w-[150px] text-slate-800 text-sm`}>{inv.company_name || 'Unknown'}</div>
-                                       <div className={`text-[10px] font-mono text-slate-500`}>{inv.ico || '-'}</div>
-                                   </td>
-                                   <td className="px-3 py-2 text-slate-600 truncate max-w-[200px] text-sm">
-                                       {inv.description || '-'}
-                                   </td>
-                                   <td className="px-3 py-2 text-right font-medium text-slate-900 text-sm whitespace-nowrap">
-                                       {formatAmount(inv.amount_without_vat, inv.currency)}
-                                   </td>
-                                   <td className="px-3 py-2 text-center flex items-center justify-center gap-2">
-                                       <button 
-                                           onClick={(e) => handleDownloadStampFromList(e, inv)}
-                                           disabled={!((inv.has_allocations ?? false) && isInvoiceBalanced)}
-                                           className="text-slate-400 hover:text-indigo-600 transition-colors p-1 disabled:opacity-30 disabled:cursor-not-allowed"
-                                           title={!((inv.has_allocations ?? false) && isInvoiceBalanced) ? "Allocate budget first." : "Download Stamped PDF"}
-                                       >
-                                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                                       </button>
-                                       <button 
-                                           onClick={(e) => handleDeleteInvoice(e, inv.id)} 
-                                           className="text-slate-300 hover:text-red-500 transition-colors p-1"
-                                           title="Delete Invoice"
-                                       >
-                                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                           </svg>
-                                       </button>
-                                   </td>
-                               </tr>
-                           );
-                       })}
+                   <tbody className="divide-y divide-slate-100">
+                       {sortedInvoices.map(inv => (
+                           <tr key={inv.id} 
+                               onClick={() => setViewingInvoiceId(inv.id)}
+                               className={`hover:bg-slate-50 transition-colors cursor-pointer group ${inv.status === 'rejected' ? 'bg-red-50 border-red-200' : ''}`}
+                           >
+                               <td className="px-6 py-3 font-mono text-indigo-600 font-bold group-hover:text-indigo-800 whitespace-nowrap">
+                                   #{inv.internal_id || '-'}
+                               </td>
+                               <td className="px-6 py-3 whitespace-nowrap">
+                                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide
+                                       ${inv.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : 
+                                         inv.status === 'final_approved' ? 'bg-indigo-100 text-indigo-700' :
+                                         inv.status === 'rejected' ? 'bg-red-100 text-red-700' : 
+                                         'bg-amber-100 text-amber-700'}`}>
+                                       {inv.status === 'approved' ? 'pending producer' : inv.status}
+                                   </span>
+                               </td>
+                               <td className="px-6 py-3 whitespace-nowrap">
+                                   <div className={`font-medium truncate max-w-[200px] ${inv.status === 'rejected' ? 'text-red-900' : 'text-slate-900'}`}>{inv.company_name || 'Unknown'}</div>
+                                   <div className={`text-xs font-mono ${inv.status === 'rejected' ? 'text-red-500' : 'text-slate-500'}`}>{inv.ico || '-'}</div>
+                               </td>
+                               <td className="px-6 py-3 text-slate-600 max-w-xs truncate whitespace-nowrap">
+                                   {inv.description || '-'}
+                               </td>
+                               <td className="px-6 py-3 text-right font-medium text-slate-900 whitespace-nowrap">
+                                   {formatAmount(inv.amount_without_vat, inv.currency)}
+                               </td>
+                               <td className="px-6 py-3 text-right">
+                                   <button 
+                                       onClick={(e) => handleDeleteInvoice(e, inv.id)} 
+                                       className="text-slate-300 hover:text-red-500 transition-colors p-1"
+                                       title="Delete Invoice"
+                                   >
+                                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                       </svg>
+                                   </button>
+                               </td>
+                           </tr>
+                       ))}
                        {sortedInvoices.length === 0 && (
                            <tr>
-                               <td colSpan={7} className="px-6 py-20 text-center text-slate-400 italic">
+                               <td colSpan={6} className="px-6 py-20 text-center text-slate-400 italic">
                                    No invoices in {activeListTab === 'processing' ? 'processing' : 'archive'}.
                                </td>
                            </tr>

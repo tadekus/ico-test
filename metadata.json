@@ -1,7 +1,5 @@
 {
   "name": "rasple2",
   "description": "Extract Czech Business ID (IČO) from PDF or Excel invoices using Gemini AI.",
-  "requestFramePermissions": [
-    "geolocation"
-  ]
+  "requestFramePermissions": []
 }

@@ -19,11 +19,6 @@ const normalizeIco = (ico: string | null | undefined): string | null => {
     return ico.replace(/[^0-9]/g, '');
 };
 
-const normalizeVariableSymbol = (vs: string | null | undefined): string | null => {
-  if (!vs) return null;
-  return vs.replace(/\s/g, ''); // Remove all whitespace
-}
-
 // --- AUTHENTICATION ---
 
 export const signUp = async (email: string, password: string) => {
@@ -87,7 +82,7 @@ export const completeAccountSetup = async (password: string, fullName: string) =
       if (rpcError) {
         console.error("Role claim RPC failed:", rpcError);
         if (profileError) throw profileError; 
-        throw rpcData; // Throw rpcData which might contain useful message
+        throw rpcError;
       }
     } catch (e) {
       console.warn("RPC call error", e);
@@ -190,14 +185,14 @@ export const checkDuplicateInvoice = async (
     // We start with the base query
     let query = supabase
         .from('invoices')
-        .select('id, variableSymbol, amount_with_vat')
+        .select('id, variable_symbol, amount_with_vat')
         .eq('project_id', projectId)
         .eq('ico', cleanIco);
 
     // Filter logic
     if (cleanVs) {
        // Strong Match: IČO + VS (Checking against normalized DB data)
-       query = query.eq('variableSymbol', cleanVs);
+       query = query.eq('variable_symbol', cleanVs);
     } else if (amount) {
        // Fallback Match: IČO + Amount (if VS missing)
        query = query.eq('amount_with_vat', amount);
@@ -248,7 +243,7 @@ export const saveExtractionResult = async (
         company_name: result.companyName,
         bank_account: result.bankAccount,
         iban: result.iban,
-        variableSymbol: normalizedVs, // Save normalized VS
+        variable_symbol: normalizedVs, // Save normalized VS
         description: result.description,
         amount_with_vat: result.amountWithVat,
         amount_without_vat: result.amountWithoutVat,
@@ -257,10 +252,7 @@ export const saveExtractionResult = async (
         raw_text: result.rawText,
         status: status,
         file_content: base64 || null,
-        created_at: new Date().toISOString(),
-        // Initialize new fields (will be updated by trigger)
-        total_allocated_amount: 0, 
-        has_allocations: false
+        created_at: new Date().toISOString()
       }
     ])
     .select()
@@ -281,15 +273,9 @@ export const updateInvoice = async (
     if (finalUpdates.ico) {
         finalUpdates.ico = normalizeIco(finalUpdates.ico);
     }
-    // FIX: Corrected property name from 'variable_symbol' to 'variableSymbol'
-    if (finalUpdates.variableSymbol) {
-        finalUpdates.variableSymbol = finalUpdates.variableSymbol.replace(/\s/g, '');
+    if (finalUpdates.variable_symbol) {
+        finalUpdates.variable_symbol = finalUpdates.variable_symbol.replace(/\s/g, '');
     }
-
-    // Do NOT update total_allocated_amount or has_allocations directly here,
-    // as these are managed by the database trigger for invoice_allocations.
-    delete (finalUpdates as any).total_allocated_amount;
-    delete (finalUpdates as any).has_allocations;
 
     const { data, error } = await supabase
         .from('invoices')
@@ -305,16 +291,11 @@ export const updateInvoice = async (
 export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]> => {
   if (!supabase) throw new Error("Supabase is not configured.");
 
-  // OPTIMIZATION: EXCLUDE file_content for list view
-  // Include new allocation summary fields
+  // OPTIMIZATION: EXCLUDE file_content
+  // This drastically reduces payload size (from ~50MB to ~50KB for a list)
   let query = supabase
     .from('invoices')
-    .select(`
-      id, created_at, internal_id, ico, company_name, description, 
-      amount_with_vat, amount_without_vat, currency, status, project_id, 
-      variableSymbol, bank_account, iban, confidence, rejection_reason,
-      total_allocated_amount, has_allocations, file_content, raw_text, user_id
-    `) // Re-added file_content for list view to simplify handling in InvoiceDetail
+    .select('id, created_at, internal_id, ico, company_name, description, amount_with_vat, amount_without_vat, currency, status, project_id, variable_symbol, bank_account, iban, confidence, rejection_reason')
     .order('internal_id', { ascending: false });
 
   if (projectId) {
@@ -330,8 +311,6 @@ export const fetchInvoices = async (projectId?: number): Promise<SavedInvoice[]>
 };
 
 export const fetchInvoiceFileContent = async (invoiceId: number): Promise<string | null> => {
-    // We now fetch file_content with fetchInvoices. This function might be redundant
-    // but kept for explicit clarity if needed for specific cases.
     if (!supabase) return null;
     const { data, error } = await supabase
         .from('invoices')
@@ -346,12 +325,6 @@ export const fetchInvoiceFileContent = async (invoiceId: number): Promise<string
 export const deleteInvoice = async (id: number): Promise<void> => {
   if (!supabase) throw new Error("Supabase is not configured.");
   const { error } = await supabase.from('invoices').delete().eq('id', id);
-  if (error) throw error;
-};
-
-export const deleteInvoices = async (ids: number[]): Promise<void> => {
-  if (!supabase) throw new Error("Supabase is not configured.");
-  const { error } = await supabase.from('invoices').delete().in('id', ids);
   if (error) throw error;
 };
 

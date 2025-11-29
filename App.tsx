@@ -1,455 +1,386 @@
-import React, { useState, useEffect, useCallback, Suspense } from 'react';
-import { User } from '@supabase/supabase-js';
-import { supabase, getCurrentUser, getUserProfile, signOut, fetchProjects, fetchAssignedProjects, getProjectRole, isSupabaseConfigured, checkMyPendingInvitation } from './services/supabaseService';
-import { Profile, Project, ProjectRole, AppRole } from './types';
+
+import React, { useState, useEffect } from 'react';
+import InvoicingModule from './components/InvoicingModule';
+import CostReportModule from './components/CostReportModule';
+import AdminDashboard from './components/AdminDashboard';
+import ApprovalModule from './components/ApprovalModule';
 import Auth, { SetupAccount } from './components/Auth';
-// Lazily load components for code splitting
-const InvoicingModule = React.lazy(() => import('./components/InvoicingModule'));
-const CostReportModule = React.lazy(() => import('./components/CostReportModule'));
-const AdminDashboard = React.lazy(() => import('./components/AdminDashboard'));
-const ApprovalModule = React.lazy(() => import('./components/ApprovalModule'));
+import { Profile, Project, ProjectRole } from './types';
+import { isSupabaseConfigured, signOut, supabase, getUserProfile, checkMyPendingInvitation, acceptInvitation, fetchAssignedProjects, getProjectRole } from './services/supabaseService';
+import { User } from '@supabase/supabase-js';
 
+function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<Profile | null>(null);
+  const [isLoadingSession, setIsLoadingSession] = useState(true);
+  const [isRedirecting, setIsRedirecting] = useState(false);
+  const [hasPendingInvite, setHasPendingInvite] = useState(false);
 
-const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
+  // PROJECT CONTEXT
+  const [assignedProjects, setAssignedProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
-  const [userRole, setUserRole] = useState<ProjectRole | AppRole | null>(null); // project-specific or app-wide
-  const [activeModule, setActiveModule] = useState<'invoicing' | 'costReport' | 'admin' | 'approval'>('invoicing');
-  const [loading, setLoading] = useState(false); // General data loading (for profile/projects)
-  const [authLoading, setAuthLoading] = useState(true); // Specific for initial auth state check
-  const [error, setError] = useState<string | null>(null);
-  const [showSetupAccount, setShowSetupAccount] = useState(false);
-  const [setupAccountEmail, setSetupAccountEmail] = useState<string | null>(null);
-  const [initialInvoiceIdForCostReport, setInitialInvoiceIdForCostReport] = useState<number | null>(null);
+  const [currentProjectRole, setCurrentProjectRole] = useState<ProjectRole | null>(null);
 
-  // --- Auth State Change Listener (for *subsequent* changes) ---
+  // TABS
+  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  
+  // DEEP LINKING & VIEW CONTROL
+  const [targetInvoiceId, setTargetInvoiceId] = useState<number | null>(null);
+  const [invoiceModuleKey, setInvoiceModuleKey] = useState(0);
+
+  const configStatus = { gemini: !!process.env.API_KEY, supabase: isSupabaseConfigured };
+
+  // SYSTEM ROLES
+  const isMasterUser = user?.email?.toLowerCase() === 'tadekus@gmail.com';
+  const isAdmin = (userProfile?.app_role === 'admin') || isMasterUser;
+  const isSuperuser = (userProfile?.app_role === 'superuser') || (userProfile?.is_superuser === true && !isAdmin);
+
   useEffect(() => {
-    if (!isSupabaseConfigured || !supabase) {
-      // Handled by the initial auth check below
-      return; 
-    }
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log("Auth state changed (listener):", event, session);
-      if (session?.user) {
-        setCurrentUser(session.user);
-        setSetupAccountEmail(session.user.email ?? null);
+    const initSession = async () => {
         try {
-            const hasPendingInvitation = await checkMyPendingInvitation(session.user.email || '');
-            setShowSetupAccount(hasPendingInvitation); 
+            if (configStatus.supabase && supabase) {
+                const { data: { session } } = await supabase.auth.getSession();
+                await handleUserSession(session?.user ?? null);
+
+                const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+                    if (event === 'SIGNED_OUT') {
+                         // Strictly clear everything
+                         setUser(null);
+                         setUserProfile(null);
+                         setAssignedProjects([]);
+                         setHasPendingInvite(false);
+                         setCurrentProject(null);
+                         setCurrentProjectRole(null);
+                         setIsRedirecting(false);
+                    } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+                        handleUserSession(session?.user ?? null);
+                    }
+                });
+                return () => subscription.unsubscribe();
+            } else {
+                setIsLoadingSession(false);
+            }
         } catch (err) {
-            console.error("Error checking pending invitation in listener:", err);
-            setShowSetupAccount(false); // Default to false if check fails
+            console.error("Init Error", err);
+            setIsLoadingSession(false);
         }
-      } else { // Logged out
-        setCurrentUser(null);
-        setProfile(null);
-        setProjects([]);
-        setCurrentProject(null);
-        setUserRole(null);
-        setShowSetupAccount(false);
-        setSetupAccountEmail(null);
-      }
-      // authLoading is NOT managed by this listener. It's managed by the initial useEffect.
-    });
-
-    return () => {
-      authListener.subscription.unsubscribe();
     };
-  }, [isSupabaseConfigured]); // Only depend on config, supabase is stable reference
-
-
-  // --- Initial Auth Check (to populate currentUser on first load/refresh) ---
-  // This useEffect ensures authLoading is set false definitively after the initial check.
-  useEffect(() => {
-    let isMounted = true; // Flag to prevent state updates on unmounted components
-
-    const setupInitialAuth = async () => {
-      setAuthLoading(true); // Ensure spinner is active during this initial async op
-      setError(null); // Clear previous errors
-
-      if (!isSupabaseConfigured) {
-        if (isMounted) setError("Supabase is not configured. Please check your .env variables.");
-        if (isMounted) setCurrentUser(null);
-        if (isMounted) setAuthLoading(false); // CRITICAL: Dismiss even on config error
-        return;
-      }
-      if (!supabase) {
-        if (isMounted) setError("Supabase client not initialized.");
-        if (isMounted) setCurrentUser(null);
-        if (isMounted) setAuthLoading(false); // CRITICAL: Dismiss even on client init error
-        return;
-      }
-
-      try {
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        
-        if (!isMounted) return; // Prevent state update if component unmounted
-
-        if (sessionError) {
-          console.error("Error getting initial session:", sessionError);
-          setError(sessionError.message || "Failed to retrieve session.");
-          setCurrentUser(null);
-        } else if (session?.user) {
-          setCurrentUser(session.user);
-          setSetupAccountEmail(session.user.email ?? null);
-          // Initial check for pending invitation
-          try {
-            const hasPendingInvitation = await checkMyPendingInvitation(session.user.email || '');
-            if (isMounted) setShowSetupAccount(hasPendingInvitation);
-          } catch (err) {
-            console.error("Error checking pending invitation during initial auth:", err);
-            if (isMounted) setShowSetupAccount(false); // Default to false if check fails
-          }
-        } else {
-          setCurrentUser(null);
-          if (isMounted) setShowSetupAccount(false); // No user, no setup account
-        }
-      } catch (err: any) {
-        console.error("Critical error during initial authentication session retrieval:", err);
-        if (isMounted) {
-            setError(err.message || "A critical error occurred during authentication initialization.");
-            setCurrentUser(null);
-        }
-      } finally {
-        if (isMounted) {
-            setAuthLoading(false); // CRITICAL: ALWAYS dismiss authLoading when this initial check is done.
-            console.log("Initial auth check finished, authLoading dismissed.");
-        }
-      }
-    };
-
-    // Run this initial setup function once on component mount
-    setupInitialAuth();
-
-    // Cleanup function for useEffect to handle unmounting
-    return () => {
-        isMounted = false;
-    };
-  }, [isSupabaseConfigured]); // Re-run only if Supabase config changes (should be stable)
-
-
-  // --- Load Profile & Projects (runs AFTER authLoading is false and currentUser is resolved) ---
-  useEffect(() => {
-    let isMounted = true; // For cleanup
-
-    const loadProfileAndProjects = async () => {
-      if (!currentUser || !isMounted) {
-        setLoading(false); // No current user, nothing to load.
-        setProfile(null);
-        setProjects([]);
-        setCurrentProject(null);
-        setUserRole(null);
-        return;
-      }
-
-      setLoading(true); // Start loading for profile/projects
-      setError(null);
-      try {
-        const userProfile = await getUserProfile(currentUser.id);
-        
-        if (!isMounted) return;
-
-        // If no profile, or profile exists but full_name is missing, trigger setup account.
-        // This check is now the authoritative one for showing setupAccount AFTER auth is complete.
-        if (!userProfile || !userProfile.full_name) {
-          console.log("Profile missing or incomplete. Forcing setup account.");
-          setShowSetupAccount(true);
-          setSetupAccountEmail(currentUser.email ?? null);
-          setProfile(null); // Ensure profile is null during setup
-          setProjects([]);
-          setCurrentProject(null);
-          setUserRole(null);
-          // setLoading(false); -- Handled by finally block
-          return;
-        }
-
-        // If we reach here, profile is valid and complete.
-        setShowSetupAccount(false); // Ensure setup account is not shown
-        setProfile(userProfile);
-
-        let fetchedProjects: Project[] = [];
-        if (userProfile.app_role === 'admin') {
-          fetchedProjects = await fetchProjects(); // Admins see all projects
-          setActiveModule('admin'); // Default to admin dashboard
-          setUserRole('admin'); // Set app-level role
-        } else {
-          // Superusers and regular users see projects they own or are assigned to
-          const assigned = await fetchAssignedProjects(currentUser.id);
-          const owned = await fetchProjects(); 
-          const uniqueOwnedProjects = owned.filter(p => p.created_by === currentUser?.id && !assigned.some(fp => fp.id === p.id));
-          fetchedProjects = [...assigned, ...uniqueOwnedProjects];
-          
-          if (userProfile.app_role === 'superuser') {
-              setUserRole('superuser');
-          } else {
-              setUserRole('user');
-          }
-          setActiveModule('invoicing');
-        }
-        
-        if (isMounted) setProjects(fetchedProjects);
-        
-        if (fetchedProjects.length > 0) {
-            const storedProjectId = localStorage.getItem('currentProjectId');
-            const storedProject = storedProjectId ? fetchedProjects.find(p => p.id === parseInt(storedProjectId)) : null;
-            if (isMounted) setCurrentProject(storedProject || fetchedProjects[0]);
-        } else {
-            if (isMounted) setCurrentProject(null);
-        }
-
-      } catch (err: any) {
-        console.error("Error loading profile or projects:", err);
-        if (isMounted) {
-            setError(err.message || "Failed to load user data. Please ensure database setup is complete.");
-            setProfile(null); // Clear profile on error
-            setProjects([]);
-            setCurrentProject(null);
-            setUserRole(null);
-        }
-      } finally {
-        if (isMounted) {
-            setLoading(false); // IMPORTANT: Always dismiss main loading spinner here
-        }
-      }
-    };
-
-    // Trigger profile/project loading only if currentUser is set, authLoading is false,
-    // AND we are not in the SetupAccount flow (showSetupAccount also means profile incomplete).
-    if (currentUser && !authLoading && !showSetupAccount) {
-      loadProfileAndProjects();
-    } else if (!currentUser && !authLoading) { // If no current user AND authLoading is false, means we're truly logged out.
-        setLoading(false); // Ensure main loading is also false.
-        setProfile(null);
-        setProjects([]);
-        setCurrentProject(null);
-        setUserRole(null);
-    }
-    
-    return () => { isMounted = false; }; // Cleanup on unmount
-  }, [currentUser, authLoading, showSetupAccount]); // Depend on relevant state changes
-
-  // --- Update Project Role based on Current Project ---
-  useEffect(() => {
-    let isMounted = true; // For cleanup
-    const updateProjectRole = async () => {
-      if (!profile || !currentProject || profile.app_role === 'admin' || !isMounted) {
-        if (isMounted && profile?.app_role) {
-            setUserRole(profile.app_role); // Ensure admin role is set if no current project
-        }
-        return;
-      }
-
-      if (profile.app_role === 'user') { // Only for regular app users who might have project roles
-        const role = await getProjectRole(profile.id, currentProject.id);
-        if (isMounted) setUserRole(role);
-      } else { // For superusers, their app_role is their effective role
-          if (isMounted) setUserRole(profile.app_role);
-      }
-    };
-    if (profile && currentProject && !loading) { // Only update if main loading is done
-        updateProjectRole();
-    } else if (profile && !currentProject && !loading && profile.app_role) {
-        // If logged in, no project selected yet, set userRole to app_role
-        if (isMounted) setUserRole(profile.app_role);
-    }
-    return () => { isMounted = false; };
-  }, [profile, currentProject, loading]);
-
-  // --- Handle Project Selection ---
-  const handleSelectProject = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    const projectId = parseInt(e.target.value);
-    const selected = projects.find(p => p.id === projectId);
-    if (selected) {
-      setCurrentProject(selected);
-      localStorage.setItem('currentProjectId', projectId.toString());
-    }
-  }, [projects]);
-
-  // --- Handle Deep Linking from Cost Report ---
-  const handleNavigateToInvoice = useCallback((invoiceId: number) => {
-    setActiveModule('invoicing');
-    setInitialInvoiceIdForCostReport(invoiceId);
+    initSession();
   }, []);
 
-  const handleSignOut = async () => {
-    await signOut();
-    localStorage.removeItem('currentProjectId');
-    sessionStorage.clear();
-    window.location.reload(); // Force full page reload after signOut for clean state
+  useEffect(() => {
+    // Only update tabs if we are NOT in the middle of a redirect
+    if (isRedirecting || isLoadingSession) return;
+
+    if (isAdmin || isSuperuser) {
+      setActiveTab('admin');
+    } else if (currentProject && currentProjectRole === 'lineproducer') {
+      if (activeTab !== 'costreport') setActiveTab('invoicing');
+    } else if (currentProject && currentProjectRole === 'producer') {
+      if (activeTab !== 'costreport') setActiveTab('approval');
+    } else {
+      setActiveTab('dashboard');
+    }
+  }, [isAdmin, isSuperuser, currentProject, currentProjectRole, isRedirecting, isLoadingSession]);
+
+  const handleUserSession = async (currentUser: User | null) => {
+    try {
+      if (currentUser?.id === user?.id && userProfile) {
+          if (currentUser) setUser(currentUser);
+          setIsLoadingSession(false);
+          return;
+      }
+
+      setUser(currentUser);
+      if (currentUser) {
+        if (currentUser.email) {
+          const isPending = await checkMyPendingInvitation(currentUser.email);
+          if (isPending) { 
+              setHasPendingInvite(true); 
+              setIsLoadingSession(false); 
+              return; 
+          }
+        }
+
+        let profile = await getUserProfile(currentUser.id);
+        
+        // Master Override
+        if (!profile && currentUser.email?.toLowerCase() === 'tadekus@gmail.com') {
+            profile = { id: currentUser.id, email: currentUser.email, full_name: 'Master Admin (Ghost)', app_role: 'admin', created_at: new Date().toISOString() };
+        }
+        
+        if (profile) setUserProfile(profile);
+
+        // Load Projects with Retry Logic
+        let projects = await fetchAssignedProjects(currentUser.id);
+        
+        if (projects.length === 0 && profile?.app_role === 'user') {
+             await new Promise(r => setTimeout(r, 800)); // Wait 800ms
+             projects = await fetchAssignedProjects(currentUser.id);
+        }
+
+        setAssignedProjects(projects);
+        
+        // AUTO-REDIRECT LOGIC (For Regular Users)
+        if (projects.length > 0 && profile?.app_role === 'user') {
+            setIsRedirecting(true);
+            try {
+              await handleProjectChange(projects[0].id.toString(), projects, currentUser);
+              // Explicitly set tab based on role we just fetched
+              const role = await getProjectRole(currentUser.id, projects[0].id);
+              if (role === 'lineproducer') setActiveTab('invoicing');
+              if (role === 'producer') setActiveTab('approval');
+            } catch (err) {
+              console.error("Auto-redirect failed", err);
+            } finally {
+              setIsRedirecting(false);
+              setIsLoadingSession(false);
+            }
+        } else {
+            setCurrentProject(null);
+            setCurrentProjectRole(null);
+            setIsLoadingSession(false);
+        }
+
+      } else {
+        setUserProfile(null);
+        setHasPendingInvite(false);
+        setAssignedProjects([]);
+        setCurrentProject(null);
+        setCurrentProjectRole(null);
+        setIsLoadingSession(false);
+      }
+    } catch (error) {
+      console.error("Session loading error:", error);
+      setIsLoadingSession(false);
+    }
   };
 
-  if (!isSupabaseConfigured) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-red-50 text-red-700 p-4">
-        <div className="text-center text-lg font-medium">
-          <p className="mb-2">🚨 Supabase Configuration Error 🚨</p>
-          <p>Please ensure `SUPABASE_URL` and `SUPABASE_ANON_KEY` are set in your environment variables.</p>
-          <p className="mt-4 text-sm">If you just created your project, it may take a moment for environment variables to propagate.</p>
-        </div>
-      </div>
-    );
+  const handleProjectChange = async (projectId: string, projectsList = assignedProjects, targetUser: User | null = user) => {
+      const proj = projectsList.find(p => p.id.toString() === projectId) || null;
+      setCurrentProject(proj);
+      
+      setTargetInvoiceId(null);
+      
+      if (proj && targetUser) {
+          const role = await getProjectRole(targetUser.id, proj.id);
+          setCurrentProjectRole(role);
+      } else {
+          setCurrentProjectRole(null);
+      }
+  };
+
+  const handleInvoicingTabClick = () => {
+      if (activeTab === 'invoicing' && currentProject) {
+          sessionStorage.removeItem(`viewingInvoice_${currentProject.id}`);
+          setInvoiceModuleKey(prev => prev + 1);
+          setTargetInvoiceId(null);
+      }
+      setActiveTab('invoicing');
+  };
+
+  const handleSetupSuccess = async () => {
+    if (user?.email) { 
+        await acceptInvitation(user.email); 
+        setHasPendingInvite(false); 
+        await handleSignOut(); 
+        alert("Setup complete! Please sign in."); 
+    }
+  };
+
+  const handleSignOut = async () => { 
+      try {
+        await signOut(); 
+      } catch (e) {
+        console.error("Signout error", e);
+      } finally {
+        setUser(null); 
+        setUserProfile(null); 
+        setHasPendingInvite(false); 
+        setAssignedProjects([]);
+        setCurrentProject(null);
+        setActiveTab('dashboard');
+      }
+  };
+  
+  const handleNavigateToInvoice = (invoiceId: number) => {
+      setTargetInvoiceId(invoiceId);
+      if (currentProjectRole === 'lineproducer') setActiveTab('invoicing');
+      if (currentProjectRole === 'producer') setActiveTab('approval');
+  };
+
+  let headerRole = 'User';
+  if (currentProjectRole) {
+      switch(currentProjectRole) {
+          case 'lineproducer': headerRole = 'Line Producer'; break;
+          case 'producer': headerRole = 'Producer'; break;
+          case 'accountant': headerRole = 'Accountant'; break;
+      }
+  } else if (isAdmin) {
+      headerRole = 'Administrator';
+  } else if (isSuperuser) {
+      headerRole = 'Superuser';
   }
 
-  // Primary Auth Loading Spinner (for initial session check)
-  if (authLoading) {
-    return (
+  const isLineProducer = currentProjectRole === 'lineproducer';
+  const isProducer = currentProjectRole === 'producer';
+
+  if (isLoadingSession || isRedirecting) return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+          <div className="flex flex-col items-center gap-4">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+            <p className="text-slate-400 text-sm">Loading workspace...</p>
+          </div>
       </div>
-    );
-  }
-
-  // If Auth is done, but no user, show Auth component
-  if (!currentUser) {
-    return <Auth />;
-  }
-
-  // If user is authenticated, but profile is incomplete/missing, show SetupAccount
-  if (showSetupAccount && setupAccountEmail) {
-      return <SetupAccount email={setupAccountEmail} onSuccess={() => setShowSetupAccount(false)} />;
-  }
-
-  // Secondary Loading for profile & project data, after auth is confirmed and profile is setup
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
-      </div>
-    );
-  }
-
-  // If there's an error after all loading is done (e.g. project data failed)
-  if (error) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-red-50 text-red-700 p-4">
-        <div className="text-center">
-          <h2 className="text-xl font-bold mb-2">Error</h2>
-          <p>{error}</p>
-          <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg">Reload Application</button>
-        </div>
-      </div>
-    );
-  }
-    
-  const LoadingFallback = (
-    <div className="flex justify-center items-center h-full min-h-[300px] bg-white rounded-xl shadow-lg border border-slate-200">
-      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-600"></div>
-    </div>
   );
+  
+  if (hasPendingInvite && user?.email) return <SetupAccount email={user.email} onSuccess={handleSetupSuccess} />;
+  if (configStatus.supabase && !user) return <Auth />;
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      {/* Header */}
-      <header className="bg-white shadow-sm p-4 border-b border-slate-200 sticky top-0 z-20">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-6">
-            <h1 className="text-xl font-bold text-indigo-700">RASPLE2</h1>
-            
-            {/* Project Selector */}
-            {profile?.app_role !== 'admin' && (projects.length > 0 ? (
-              <div className="relative">
-                <select
-                  value={currentProject?.id || ''}
-                  onChange={handleSelectProject}
-                  className="block w-full pl-3 pr-10 py-2 text-sm border-slate-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 rounded-md bg-white text-slate-700 shadow-sm transition-colors"
-                  aria-label="Select Project"
-                >
-                  {projects.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-700">
-                  <svg className="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                    <path fillRule="evenodd" d="M10 3a1 1 0 01.707.293l3 3a1 1 0 01-1.414 1.414L10 5.414 7.707 7.707a1 1 0 01-1.414-1.414l3-3A1 1 0 0110 3zm-3.707 9.293a1 1 0 011.414 0L10 14.586l2.293-2.293a1 1 0 011.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              </div>
-            ) : (
-                <span className="text-sm text-slate-500 italic">No projects available</span>
-            ))}
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50/50 flex flex-col">
+        {/* TOP BAR */}
+        <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                <div className="flex items-center gap-8">
+                    <div className="flex items-center gap-2">
+                        <div className="bg-indigo-600 rounded p-1.5"><svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg></div>
+                        <div>
+                            <span className="font-bold text-slate-800 text-lg tracking-tight block leading-none">RASPLE2</span>
+                            <span className="text-[10px] text-slate-400 font-medium tracking-wide">powered by Ministerstvo Kouzel</span>
+                        </div>
+                    </div>
 
-            {/* Navigation Tabs */}
-            <nav className="flex space-x-2">
-              {profile?.app_role !== 'admin' && profile?.app_role !== 'superuser' && ( // Regular users, Line Producers, Accountants
-                  <>
-                    <button
-                      onClick={() => setActiveModule('invoicing')}
-                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${activeModule === 'invoicing' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
-                    >
-                      Invoicing
-                    </button>
-                    <button
-                      onClick={() => setActiveModule('costReport')}
-                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${activeModule === 'costReport' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
-                    >
-                      Cost Report
-                    </button>
-                    {userRole === 'producer' && ( // Only producer role for current project
-                       <button
-                          onClick={() => setActiveModule('approval')}
-                          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${activeModule === 'approval' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
-                        >
-                          Approval
-                        </button>
+                    {!isAdmin && !isSuperuser && (
+                        <div className="hidden md:flex items-center gap-4 border-l border-slate-200 pl-6 ml-6">
+                            <div className="flex items-center gap-2">
+                                <label className="text-xs font-bold text-slate-400 uppercase">Project</label>
+                                <select 
+                                    value={currentProject?.id || ''}
+                                    onChange={(e) => handleProjectChange(e.target.value)}
+                                    className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block p-2 min-w-[200px]"
+                                >
+                                    {assignedProjects.length === 0 && <option value="">No Active Projects</option>}
+                                    {assignedProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                </select>
+                            </div>
+
+                            {isLineProducer && (
+                                <>
+                                    <div className="h-6 w-px bg-slate-200"></div>
+                                    <div className="flex bg-slate-100 p-1 rounded-lg">
+                                        <button onClick={handleInvoicingTabClick} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'invoicing' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>INVOICING</button>
+                                        <button onClick={() => setActiveTab('costreport')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'costreport' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>COST REPORT</button>
+                                    </div>
+                                </>
+                            )}
+                            
+                            {isProducer && (
+                                <>
+                                    <div className="h-6 w-px bg-slate-200"></div>
+                                    <div className="flex bg-slate-100 p-1 rounded-lg">
+                                        <button onClick={() => setActiveTab('approval')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'approval' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>APPROVAL</button>
+                                        <button onClick={() => setActiveTab('costreport')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all ${activeTab === 'costreport' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>COST REPORT</button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
                     )}
-                  </>
-              )}
-              { (profile?.app_role === 'admin' || profile?.app_role === 'superuser') && ( // Admins & Superusers
-                 <button
-                    onClick={() => setActiveModule('admin')}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${activeModule === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}
-                  >
-                    Admin
-                  </button>
-              )}
-            </nav>
-          </div>
+                </div>
 
-          <div className="flex items-center gap-4">
-            <div className="text-sm text-right">
-              <p className="font-semibold text-slate-800">{profile?.full_name || currentUser.email}</p>
-              <p className="text-xs text-slate-500">
-                {userRole && userRole !== 'user' ? (
-                    <span className="capitalize">{userRole}</span>
-                ) : (
-                    <span>Team Member ({currentProject?.name})</span>
-                )}
-              </p>
+                <div className="flex items-center gap-4">
+                    <div className="text-right hidden sm:block">
+                        <div className="text-sm font-medium text-slate-900">{userProfile?.full_name || user?.email}</div>
+                        <div className="text-xs text-indigo-600 font-bold uppercase tracking-wider flex justify-end items-center gap-1">
+                             <span>[ {headerRole} ]</span>
+                        </div>
+                    </div>
+                    <button onClick={handleSignOut} className="text-slate-400 hover:text-red-500 transition-colors">
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+                    </button>
+                </div>
             </div>
-            <button
-              onClick={handleSignOut}
-              className="px-3 py-1.5 text-sm font-medium text-slate-600 hover:text-indigo-700 hover:bg-slate-50 rounded-lg transition-colors"
-            >
-              Sign Out
-            </button>
-          </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Main Content */}
-      <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
-        <Suspense fallback={LoadingFallback}>
-          {activeModule === 'invoicing' && currentProject && <InvoicingModule key={currentProject.id} currentProject={currentProject} initialInvoiceId={initialInvoiceIdForCostReport} />}
-          {activeModule === 'costReport' && currentProject && <CostReportModule key={currentProject.id} currentProject={currentProject} onNavigateToInvoice={handleNavigateToInvoice} />}
-          {activeModule === 'admin' && profile && <AdminDashboard profile={profile} />}
-          {activeModule === 'approval' && currentProject && <ApprovalModule key={currentProject.id} currentProject={currentProject} />}
+        {/* MAIN CONTENT */}
+        <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
+            
+            {(isAdmin || isSuperuser) && (
+                <div className="flex justify-center mb-8">
+                    <div className="bg-white/50 backdrop-blur-sm p-1 rounded-xl shadow-sm border border-slate-200 inline-flex">
+                        <button onClick={() => setActiveTab('admin')} className={`px-6 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'admin' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                            {isAdmin ? 'System Admin' : 'Projects & Team'}
+                        </button>
+                    </div>
+                </div>
+            )}
 
-          {/* Placeholder if no project is selected for invoicing/cost report */}
-          {(activeModule === 'invoicing' || activeModule === 'costReport' || activeModule === 'approval') && !currentProject && profile?.app_role !== 'admin' && (
-              <div className="py-20 text-center text-slate-500">
-                  <h2 className="text-xl font-bold mb-2">No Project Selected</h2>
-                  <p>Please select a project from the dropdown above to continue, or create a new one in the Admin dashboard.</p>
-              </div>
-          )}
-        </Suspense>
-      </main>
+            <div className="transition-all duration-300">
+                {activeTab === 'invoicing' && isLineProducer && (
+                    <InvoicingModule 
+                        key={invoiceModuleKey}
+                        currentProject={currentProject} 
+                        initialInvoiceId={targetInvoiceId}
+                    />
+                )}
+                
+                {activeTab === 'approval' && isProducer && currentProject && (
+                    <ApprovalModule currentProject={currentProject} />
+                )}
+                
+                {activeTab === 'costreport' && (isLineProducer || isProducer) && currentProject && (
+                    <CostReportModule 
+                        currentProject={currentProject} 
+                        onNavigateToInvoice={handleNavigateToInvoice}
+                    />
+                )}
+
+                {activeTab === 'admin' && userProfile && (
+                    <AdminDashboard profile={userProfile} />
+                )}
+
+                {/* EMPTY STATE / PROJECT SELECTOR (Replaces Overview) */}
+                {activeTab === 'dashboard' && !isAdmin && !isSuperuser && (
+                    <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
+                        {assignedProjects.length === 0 ? (
+                             <>
+                                <div className="inline-flex p-6 bg-slate-50 rounded-full mb-6">
+                                    <svg className="w-12 h-12 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.384-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                                    </svg>
+                                </div>
+                                <h2 className="text-xl font-bold text-slate-800 mb-2">No Projects Assigned</h2>
+                                <p className="text-slate-500 max-w-sm mx-auto">
+                                    You are not currently assigned to any active projects. Contact your Producer.
+                                </p>
+                             </>
+                        ) : (
+                            <>
+                                <div className="inline-flex p-6 bg-indigo-50 rounded-full mb-6">
+                                    <svg className="w-12 h-12 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                                    </svg>
+                                </div>
+                                <h2 className="text-2xl font-bold text-slate-800 mb-2">Select a Project</h2>
+                                <p className="text-slate-500 mb-8 max-w-sm mx-auto">
+                                    Select a project from the top menu to access invoices.
+                                </p>
+                                <select 
+                                    value=""
+                                    onChange={(e) => handleProjectChange(e.target.value)}
+                                    className="bg-white border border-slate-300 text-slate-700 text-lg rounded-lg focus:ring-indigo-500 focus:border-indigo-500 block w-64 p-3 shadow-sm"
+                                >
+                                    <option value="" disabled>Choose Project...</option>
+                                    {assignedProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                </select>
+                            </>
+                        )}
+                    </div>
+                )}
+            </div>
+        </main>
     </div>
   );
-};
+}
 
 export default App;
