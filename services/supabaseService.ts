@@ -87,7 +87,7 @@ export const completeAccountSetup = async (password: string, fullName: string) =
       if (rpcError) {
         console.error("Role claim RPC failed:", rpcError);
         if (profileError) throw profileError; 
-        throw rpcError;
+        throw rpcData; // Throw rpcData which might contain useful message
       }
     } catch (e) {
       console.warn("RPC call error", e);
