@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
@@ -207,7 +208,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
   const handleDownloadStampFromList = async (e: React.MouseEvent, invoiceToStamp: SavedInvoice) => {
       e.stopPropagation(); // Prevent opening detail view
       // Check for necessary properties, defaulting total_allocated_amount to 0 for safety
-      if (!currentProject || !invoiceToStamp.id || (invoiceToStamp.has_allocations ?? false === false) || (invoiceToStamp.amount_without_vat === null || invoiceToStamp.amount_without_vat === undefined)) return; 
+      if (!currentProject || !invoiceToStamp.id || !(invoiceToStamp.has_allocations ?? false) || (invoiceToStamp.amount_without_vat === null || invoiceToStamp.amount_without_vat === undefined)) return; 
 
       try {
           // Fetch full content on demand as list doesn't carry it
@@ -338,12 +339,12 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
               companyName: activeInvoice.company_name,
               bankAccount: activeInvoice.bank_account,
               iban: activeInvoice.iban,
-              amountWithVat: activeInvoice.amount_with_vat,
-              amountWithoutVat: activeInvoice.amount_without_vat,
-              currency: activeInvoice.currency,
               // FIX: Use 'variableSymbol' from SavedInvoice type
               variableSymbol: activeInvoice.variableSymbol,
               description: activeInvoice.description,
+              amountWithVat: activeInvoice.amount_with_vat,
+              amountWithoutVat: activeInvoice.amount_without_vat,
+              currency: activeInvoice.currency,
               confidence: activeInvoice.confidence,
               rawText: activeInvoice.raw_text || undefined
           }

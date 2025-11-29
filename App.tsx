@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase, getCurrentUser, getUserProfile, signOut, fetchProjects, fetchAssignedProjects, getProjectRole, isSupabaseConfigured, checkMyPendingInvitation } from './services/supabaseService';
@@ -70,6 +71,7 @@ const App: React.FC = () => {
     // Initial check for session
     const checkSession = async () => {
       if (!supabase) return; // Add null check for supabase
+      setAuthLoading(true); // Explicitly start loading state for initial check
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         setCurrentUser(session.user);
