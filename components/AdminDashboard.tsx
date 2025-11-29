@@ -946,4 +946,3 @@ DO $$ BEGIN
 
     RAISE NOTICE 'Initial admin profile setup complete.';
 END $$;
-`;
