@@ -200,12 +200,10 @@ const App: React.FC = () => {
     // Clear local storage items that might persist state
     localStorage.removeItem('currentProjectId');
     sessionStorage.clear();
-    setProjects([]);
-    setCurrentProject(null);
-    setUserRole(null);
-    setProfile(null);
-    setCurrentUser(null);
-    setAuthLoading(true); // Indicate that auth state is being re-checked
+    // A full page reload is added here to ensure all React component states and
+    // Supabase client instance are completely reset, resolving potential
+    // "spinning wheel on logout" issues due to stale state or race conditions.
+    window.location.reload();
   };
 
   if (!isSupabaseConfigured) {

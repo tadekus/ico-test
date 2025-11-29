@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Dropzone from './Dropzone';
 import InvoiceDetail from './InvoiceDetail';
@@ -208,7 +207,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
   const handleDownloadStampFromList = async (e: React.MouseEvent, invoiceToStamp: SavedInvoice) => {
       e.stopPropagation(); // Prevent opening detail view
       // Check for necessary properties, defaulting total_allocated_amount to 0 for safety
-      if (!currentProject || !invoiceToStamp.id || !invoiceToStamp.has_allocations || (invoiceToStamp.amount_without_vat === null || invoiceToStamp.amount_without_vat === undefined)) return; 
+      if (!currentProject || !invoiceToStamp.id || (invoiceToStamp.has_allocations ?? false === false) || (invoiceToStamp.amount_without_vat === null || invoiceToStamp.amount_without_vat === undefined)) return; 
 
       try {
           // Fetch full content on demand as list doesn't carry it
@@ -537,9 +536,9 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
                                    <td className="px-3 py-2 text-center flex items-center justify-center gap-2">
                                        <button 
                                            onClick={(e) => handleDownloadStampFromList(e, inv)}
-                                           disabled={!(inv.has_allocations && isInvoiceBalanced)}
+                                           disabled={!((inv.has_allocations ?? false) && isInvoiceBalanced)}
                                            className="text-slate-400 hover:text-indigo-600 transition-colors p-1 disabled:opacity-30 disabled:cursor-not-allowed"
-                                           title={!(inv.has_allocations && isInvoiceBalanced) ? "Allocate budget first." : "Download Stamped PDF"}
+                                           title={!((inv.has_allocations ?? false) && isInvoiceBalanced) ? "Allocate budget first." : "Download Stamped PDF"}
                                        >
                                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                                        </button>
