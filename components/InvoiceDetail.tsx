@@ -82,11 +82,10 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   const totalAllocated = allocations.reduce((sum, a) => sum + a.amount, 0);
   const invoiceTotal = editedResult?.amountWithoutVat || 0;
   const unallocated = invoiceTotal - totalAllocated;
-  // Allow strict tolerance
-  const isBalanced = Math.abs(unallocated) <= 1.0; 
+  const isBalanced = Math.abs(unallocated) <= 1; // Allow small tolerance for UI
 
   const handleSave = async (targetStatus: SavedInvoice['status'] = 'approved') => {
-    setSaveStatus('idle'); 
+    setSaveStatus('idle'); // Reset status
     setErrorMessage(null);
     
     // RECALCULATE STRICTLY INSIDE HANDLER
@@ -231,12 +230,10 @@ const InvoiceDetail: React.FC<InvoiceDetailProps> = ({ invoice, fileData, projec
   };
 
   const filteredBudgetLines = allocationSearch && !selectedBudgetLine
-    ? budgetLines.filter(l => {
-        const searchStr = allocationSearch.toLowerCase();
-        const accNum = (l.account_number || '').toLowerCase();
-        const accDesc = (l.account_description || '').toLowerCase();
-        return accNum.includes(searchStr) || accDesc.includes(searchStr);
-      }).slice(0, 20)
+    ? budgetLines.filter(l => 
+        l.account_number.toLowerCase().includes(allocationSearch.toLowerCase()) || 
+        l.account_description.toLowerCase().includes(allocationSearch.toLowerCase())
+      ).slice(0, 20)
     : [];
 
   const availableSuggestions = suggestedLines.filter(line => !allocations.some(a => a.budget_line_id === line.id));

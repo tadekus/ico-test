@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Project, SavedInvoice } from '../types';
 import { fetchInvoices } from '../services/supabaseService';
