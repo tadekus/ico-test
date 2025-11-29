@@ -1,14 +1,9 @@
 
-import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, useRef } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase, getCurrentUser, getUserProfile, signOut, fetchProjects, fetchAssignedProjects, getProjectRole, isSupabaseConfigured, checkMyPendingInvitation } from './services/supabaseService';
 import { Profile, Project, ProjectRole, AppRole } from './types';
 import Auth, { SetupAccount } from './components/Auth';
-// import InvoicingModule from './components/InvoicingModule'; // Removed direct import
-// import CostReportModule from './components/CostReportModule'; // Removed direct import
-// import AdminDashboard from './components/AdminDashboard'; // Removed direct import
-// import ApprovalModule from './components/ApprovalModule'; // Removed direct import
-
 // Lazily load components for code splitting
 const InvoicingModule = React.lazy(() => import('./components/InvoicingModule'));
 const CostReportModule = React.lazy(() => import('./components/CostReportModule'));
@@ -23,12 +18,15 @@ const App: React.FC = () => {
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [userRole, setUserRole] = useState<ProjectRole | AppRole | null>(null); // project-specific or app-wide
   const [activeModule, setActiveModule] = useState<'invoicing' | 'costReport' | 'admin' | 'approval'>('invoicing');
-  const [loading, setLoading] = useState(true);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [loading, setLoading] = useState(false); // General data loading
+  const [authLoading, setAuthLoading] = useState(true); // Specific for initial auth state
   const [error, setError] = useState<string | null>(null);
   const [showSetupAccount, setShowSetupAccount] = useState(false);
   const [setupAccountEmail, setSetupAccountEmail] = useState<string | null>(null);
   const [initialInvoiceIdForCostReport, setInitialInvoiceIdForCostReport] = useState<number | null>(null);
+
+  // Ref to ensure initial auth check only dismisses authLoading once
+  const isFirstAuthCheckDone = useRef(false);
 
   // --- Auth State Change Listener (for *subsequent* changes) ---
   useEffect(() => {
@@ -44,7 +42,8 @@ const App: React.FC = () => {
         setSetupAccountEmail(session.user.email ?? null);
         try {
             const hasPendingInvitation = await checkMyPendingInvitation(session.user.email || '');
-            setShowSetupAccount(hasPendingInvitation);
+            // Only show setup if user has an invitation AND they don't have a profile yet (checked in loadProfileAndProjects)
+            setShowSetupAccount(hasPendingInvitation); 
         } catch (err) {
             console.error("Error checking pending invitation in listener:", err);
             setShowSetupAccount(false); // Default to false if check fails
@@ -67,71 +66,60 @@ const App: React.FC = () => {
     };
   }, [isSupabaseConfigured]); // Only depend on config, supabase is stable reference
 
-  // --- Initial Auth Check (robust and guaranteed to resolve authLoading) ---
+  // --- Initial Auth Check (to populate currentUser on first load/refresh) ---
   useEffect(() => {
-    const checkInitialAuth = async () => {
+    const checkInitialAuthSession = async () => {
       if (!isSupabaseConfigured) {
         setError("Supabase is not configured. Please check your .env variables.");
-        setLoading(false);
-        setAuthLoading(false);
+        setCurrentUser(null);
         return;
       }
       if (!supabase) {
         setError("Supabase client not initialized.");
-        setLoading(false);
-        setAuthLoading(false);
+        setCurrentUser(null);
         return;
       }
 
-      setAuthLoading(true); // Explicitly start loading for initial check
       setError(null); // Clear previous errors
-
       try {
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
         if (sessionError) {
           console.error("Error getting initial session:", sessionError);
           setError(sessionError.message || "Failed to retrieve session.");
-          setCurrentUser(null); // Ensure user is null on session error
+          setCurrentUser(null);
         } else if (session?.user) {
           setCurrentUser(session.user);
           setSetupAccountEmail(session.user.email ?? null);
-          try {
-            const hasPendingInvitation = await checkMyPendingInvitation(session.user.email || '');
-            setShowSetupAccount(hasPendingInvitation);
-          } catch (err) {
-            console.error("Error checking pending invitation during initial auth:", err);
-            setShowSetupAccount(false); // Assume no pending invitation if check fails
-          }
+          // Pending invitation check will run in the listener or loadProfileAndProjects
         } else {
-          // No session found initially, ensure states are cleared
           setCurrentUser(null);
-          setProfile(null);
-          setProjects([]);
-          setCurrentProject(null);
-          setUserRole(null);
-          setShowSetupAccount(false);
-          setSetupAccountEmail(null);
         }
       } catch (err: any) {
-        console.error("Critical error during initial authentication:", err);
+        console.error("Critical error during initial authentication session retrieval:", err);
         setError(err.message || "A critical error occurred during authentication initialization.");
-        // Clear all states to ensure Auth component can render
         setCurrentUser(null);
-        setProfile(null);
-        setProjects([]);
-        setCurrentProject(null);
-        setUserRole(null);
-        setShowSetupAccount(false);
-        setSetupAccountEmail(null);
-      } finally {
-        // CRITICAL: ALWAYS set authLoading to false at the end of the initial check.
-        setAuthLoading(false);
       }
     };
 
-    checkInitialAuth();
-  }, [isSupabaseConfigured]); // Run once on mount
+    // Only run this once to get the initial session
+    if (!isFirstAuthCheckDone.current) {
+      checkInitialAuthSession();
+    }
+  }, [isSupabaseConfigured]); // Run only on initial mount or config changes
+
+  // --- Effect to Dismiss authLoading AFTER currentUser is first determined ---
+  // This guarantees authLoading is set false once currentUser is non-null OR null for the first time
+  useEffect(() => {
+    if (!isFirstAuthCheckDone.current && (currentUser !== null || (currentUser === null && !authLoading))) {
+      // This condition ensures it fires *after* checkInitialAuthSession has had a chance to set currentUser
+      // or confirm it's null, and authLoading is still true or just finished.
+      setAuthLoading(false);
+      isFirstAuthCheckDone.current = true; // Mark as done forever
+      console.log("Auth loading dismissed.");
+    }
+  }, [currentUser, authLoading]); // Depend on currentUser to trigger once its initial state is known
+
 
   // --- Load Profile & Projects (runs AFTER authLoading is false and currentUser is resolved) ---
   useEffect(() => {
@@ -145,35 +133,28 @@ const App: React.FC = () => {
         return;
       }
 
-      if (showSetupAccount) {
-          setLoading(false); // If setup account is active, stop loading for main app.
-          return;
-      }
-
+      // We explicitly check the profile here to determine if setup account is truly needed
+      // even if an invitation was pending.
       setLoading(true); // Start loading for profile/projects
       setError(null);
       try {
         const userProfile = await getUserProfile(currentUser.id);
         
-        if (!userProfile) {
-          // Critical state: user is authenticated but has no profile record.
-          console.log("Authenticated user has no profile. Forcing setup account.");
+        // If no profile, or profile exists but full_name is missing, trigger setup account.
+        if (!userProfile || !userProfile.full_name) {
+          console.log("Profile missing or incomplete. Forcing setup account.");
           setShowSetupAccount(true);
           setSetupAccountEmail(currentUser.email ?? null);
+          setProfile(null); // Ensure profile is null during setup
+          setProjects([]);
+          setCurrentProject(null);
+          setUserRole(null);
           setLoading(false); 
           return;
         }
-        
-        // If profile *is* found but full_name is missing, show setup account.
-        if (!userProfile.full_name) { // Explicitly check full_name
-            console.log("Profile found but full name missing, showing setup account.");
-            setShowSetupAccount(true);
-            setSetupAccountEmail(currentUser.email ?? null);
-            setLoading(false);
-            return;
-        }
 
         // If we reach here, profile is valid and complete.
+        setShowSetupAccount(false); // Ensure setup account is not shown
         setProfile(userProfile);
 
         let fetchedProjects: Project[] = [];
@@ -209,6 +190,10 @@ const App: React.FC = () => {
       } catch (err: any) {
         console.error("Error loading profile or projects:", err);
         setError(err.message || "Failed to load user data. Please ensure database setup is complete.");
+        setProfile(null); // Clear profile on error
+        setProjects([]);
+        setCurrentProject(null);
+        setUserRole(null);
       } finally {
         setLoading(false); // IMPORTANT: Always dismiss loading spinner here
       }
@@ -220,6 +205,10 @@ const App: React.FC = () => {
       loadProfileAndProjects();
     } else if (!currentUser && !authLoading) { // If no current user AND authLoading is false, means we're truly logged out.
         setLoading(false); // Ensure main loading is also false.
+        setProfile(null);
+        setProjects([]);
+        setCurrentProject(null);
+        setUserRole(null);
     }
   }, [currentUser, authLoading, showSetupAccount]); // Depend on relevant state changes
 
@@ -235,7 +224,7 @@ const App: React.FC = () => {
         setUserRole(null);
       }
     };
-    if (profile && currentProject && !loading) {
+    if (profile && currentProject && !loading) { // Only update if main loading is done
         updateProjectRole();
     }
   }, [profile, currentProject, loading]);
@@ -260,7 +249,7 @@ const App: React.FC = () => {
     await signOut();
     localStorage.removeItem('currentProjectId');
     sessionStorage.clear();
-    window.location.reload();
+    window.location.reload(); // Force full page reload after signOut for clean state
   };
 
   if (!isSupabaseConfigured) {
@@ -269,11 +258,13 @@ const App: React.FC = () => {
         <div className="text-center text-lg font-medium">
           <p className="mb-2">🚨 Supabase Configuration Error 🚨</p>
           <p>Please ensure `SUPABASE_URL` and `SUPABASE_ANON_KEY` are set in your environment variables.</p>
+          <p className="mt-4 text-sm">If you just created your project, it may take a moment for environment variables to propagate.</p>
         </div>
       </div>
     );
   }
 
+  // Primary Auth Loading Spinner
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -282,16 +273,17 @@ const App: React.FC = () => {
     );
   }
 
+  // If Auth is done, but no user, show Auth component
   if (!currentUser) {
     return <Auth />;
   }
 
+  // If user is authenticated, but profile is incomplete/missing, show SetupAccount
   if (showSetupAccount && setupAccountEmail) {
       return <SetupAccount email={setupAccountEmail} onSuccess={() => setShowSetupAccount(false)} />;
   }
 
-  // Fallback if loading is true, but authLoading is false and user exists.
-  // This handles the secondary data loading (profile, projects).
+  // Secondary Loading for profile & project data, after auth is confirmed
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -300,13 +292,14 @@ const App: React.FC = () => {
     );
   }
 
+  // If there's an error after all loading is done (e.g. project data failed)
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-red-50 text-red-700 p-4">
         <div className="text-center">
           <h2 className="text-xl font-bold mb-2">Error</h2>
           <p>{error}</p>
-          <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg">Retry</button>
+          <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg">Reload Application</button>
         </div>
       </div>
     );
