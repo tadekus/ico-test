@@ -263,7 +263,7 @@ const InvoicingModule: React.FC<InvoicingModuleProps> = ({ currentProject, initi
           file: new File([], "Stored Invoice"), // Placeholder
           type: 'pdf', // Assuming pdf as default for existing, or detect from file_content?
           status: 'saved',
-          base64: activeInvoice.file_content || undefined,
+          base64: activeInvoice.file_content || undefined, // Pass content if available
           extractionResult: {
               ico: activeInvoice.ico,
               companyName: activeInvoice.company_name,

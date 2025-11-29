@@ -69,7 +69,7 @@ export const stampInvoicePdf = async (
     });
 
     // 7. Save
-    const stampedPdfBytes = await pdfDoc.save(); // Use a different name for output bytes
+    const stampedPdfBytes = await pdfDoc.save();
     return stampedPdfBytes;
 
   } catch (error) {
